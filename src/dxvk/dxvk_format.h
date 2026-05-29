@@ -45,6 +45,8 @@ namespace dxvk {
     VkImageUsageFlags           usage;
     VkImageCreateFlags          flags;
     VkExternalMemoryHandleTypeFlagBits handleType;
+    VkBool32                    hasDrmFormatModifier;
+    uint64_t                    drmFormatModifier;
   };
 
   /**

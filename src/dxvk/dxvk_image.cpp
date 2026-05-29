@@ -127,6 +127,7 @@ namespace dxvk {
     m_allocator->registerResource(this);
 
     copyFormatList(createInfo.viewFormatCount, createInfo.viewFormats);
+    copyDrmFormatModifierList(createInfo.drmFormatModifierCount, createInfo.drmFormatModifiers);
     m_unifiedLayoutAvailable = device->features().khrUnifiedImageLayouts.unifiedImageLayouts;
 
     // Assign debug name to image
@@ -177,6 +178,7 @@ namespace dxvk {
     m_allocator->registerResource(this);
 
     copyFormatList(createInfo.viewFormatCount, createInfo.viewFormats);
+    copyDrmFormatModifierList(createInfo.drmFormatModifierCount, createInfo.drmFormatModifiers);
 
     // Create backing storage for existing image resource
     DxvkAllocationInfo allocationInfo = { };
@@ -216,6 +218,27 @@ namespace dxvk {
 #endif
 
     return handle;
+  }
+
+
+  int DxvkImage::sharedFd(VkExternalMemoryHandleTypeFlagBits handleType) const {
+    int fd = -1;
+
+    if (!m_shared)
+      return -1;
+
+#ifdef VK_KHR_external_memory_fd
+    DxvkResourceMemoryInfo memoryInfo = m_storage->getMemoryInfo();
+
+    VkMemoryGetFdInfoKHR fdInfo = { VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR };
+    fdInfo.memory = memoryInfo.memory;
+    fdInfo.handleType = handleType;
+
+    if (m_vkd->vkGetMemoryFdKHR(m_vkd->device(), &fdInfo, &fd) != VK_SUCCESS)
+      Logger::warn("DxvkImage::sharedFd: Failed to get shared fd for image");
+#endif
+
+    return fd;
   }
 
 
@@ -279,6 +302,13 @@ namespace dxvk {
     small_vector<VkFormat, 4> localViewFormats;
 
     VkImageCreateInfo imageInfo = getImageCreateInfo(usageInfo);
+
+    VkImageDrmFormatModifierListCreateInfoEXT modifierList = { VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT };
+    modifierList.drmFormatModifierCount = m_info.drmFormatModifierCount;
+    modifierList.pDrmFormatModifiers = m_info.drmFormatModifiers;
+
+    if (m_info.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT && m_info.drmFormatModifierCount)
+      modifierList.pNext = std::exchange(imageInfo.pNext, &modifierList);
 
     // Set up view format list so that drivers can better enable
     // compression. Skip for planar formats due to validation errors.
@@ -604,13 +634,53 @@ namespace dxvk {
   }
 
 
+  void DxvkImage::copyDrmFormatModifierList(uint32_t modifierCount, const uint64_t* modifiers) {
+    m_drmFormatModifiers.resize(modifierCount);
+
+    for (uint32_t i = 0; i < modifierCount; i++)
+      m_drmFormatModifiers[i] = modifiers[i];
+
+    m_info.drmFormatModifierCount = modifierCount;
+    m_info.drmFormatModifiers = m_drmFormatModifiers.data();
+  }
+
+
   bool DxvkImage::canShareImage(DxvkDevice* device, const VkImageCreateInfo& createInfo, const DxvkSharedHandleInfo& sharingInfo) const {
     if (sharingInfo.mode == DxvkSharedHandleMode::None)
       return false;
 
-    if (!device->features().khrExternalMemoryWin32) {
-      Logger::err("Failed to create shared resource: VK_KHR_EXTERNAL_MEMORY_WIN32 not supported");
-      return false;
+    switch (sharingInfo.type) {
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT:
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT:
+        if (!device->features().khrExternalMemoryWin32) {
+          Logger::err("Failed to create shared resource: VK_KHR_EXTERNAL_MEMORY_WIN32 not supported");
+          return false;
+        }
+        break;
+
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT:
+        if (!device->features().khrExternalMemoryFd) {
+          Logger::err("Failed to create shared resource: VK_KHR_EXTERNAL_MEMORY_FD not supported");
+          return false;
+        }
+        break;
+
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT:
+        if (!device->features().khrExternalMemoryFd
+         || !device->features().extExternalMemoryDmaBuf
+         || !device->features().extImageDrmFormatModifier) {
+          Logger::err("Failed to create shared resource: dmabuf external memory not supported");
+          return false;
+        }
+        if (sharingInfo.mode != DxvkSharedHandleMode::Export) {
+          Logger::err("Failed to create shared resource: dmabuf import is not supported");
+          return false;
+        }
+        break;
+
+      default:
+        Logger::err("Failed to create shared resource: Unsupported external memory handle type");
+        return false;
     }
 
     if (createInfo.flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) {
@@ -626,14 +696,34 @@ namespace dxvk {
     formatQuery.flags = createInfo.flags;
     formatQuery.handleType = sharingInfo.type;
 
+    VkExternalMemoryFeatureFlagBits requiredFeature = sharingInfo.mode == DxvkSharedHandleMode::Export
+      ? VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT
+      : VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
+
+    if (createInfo.tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
+      if (!m_info.drmFormatModifierCount || !m_info.drmFormatModifiers) {
+        Logger::err("Failed to create shared resource: No DRM format modifiers provided");
+        return false;
+      }
+
+      for (uint32_t i = 0; i < m_info.drmFormatModifierCount; i++) {
+        formatQuery.hasDrmFormatModifier = VK_TRUE;
+        formatQuery.drmFormatModifier = m_info.drmFormatModifiers[i];
+
+        auto limits = device->getFormatLimits(formatQuery);
+
+        if (limits && (limits->externalFeatures & requiredFeature))
+          return true;
+      }
+
+      Logger::err("Failed to create shared resource: Image cannot be shared");
+      return false;
+    }
+
     auto limits = device->getFormatLimits(formatQuery);
 
     if (!limits)
       return false;
-
-    VkExternalMemoryFeatureFlagBits requiredFeature = sharingInfo.mode == DxvkSharedHandleMode::Export
-      ? VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT
-      : VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
 
     if (!(limits->externalFeatures & requiredFeature)) {
       Logger::err("Failed to create shared resource: Image cannot be shared");

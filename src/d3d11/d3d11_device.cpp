@@ -1622,14 +1622,50 @@ namespace dxvk {
 
   
   HRESULT STDMETHODCALLTYPE D3D11Device::OpenSharedResourceByName(
-          LPCWSTR     lpName, 
-          DWORD       dwDesiredAccess, 
-          REFIID      returnedInterface, 
+          LPCWSTR     lpName,
+          DWORD       dwDesiredAccess,
+          REFIID      returnedInterface,
           void**      ppResource) {
     InitReturnPtr(ppResource);
-    
-    Logger::err("D3D11Device::OpenSharedResourceByName: Not implemented");
-    return E_NOTIMPL;
+
+    if (!lpName) return E_INVALIDARG;
+
+    WCHAR buffer[MAX_PATH];
+    DWORD session = 0;
+    DWORD name_len = wcslen(lpName);
+
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &session))
+      return HRESULT_FROM_WIN32(GetLastError());
+
+    DWORD prefix_len = swprintf(buffer, ARRAYSIZE(buffer),
+        L"\\Sessions\\%u\\BaseNamedObjects\\", session);
+    if (prefix_len == 0 || prefix_len + name_len + 1 > ARRAYSIZE(buffer))
+      return E_INVALIDARG;
+    memcpy(buffer + prefix_len, lpName, (name_len + 1) * sizeof(WCHAR));
+
+    UNICODE_STRING name_str = { };
+    name_str.Length         = (prefix_len + name_len) * sizeof(WCHAR);
+    name_str.MaximumLength  = name_str.Length + sizeof(WCHAR);
+    name_str.Buffer         = buffer;
+
+    OBJECT_ATTRIBUTES attr = { };
+    attr.Length             = sizeof(attr);
+    attr.ObjectName         = &name_str;
+    attr.Attributes         = OBJ_CASE_INSENSITIVE;
+
+    D3DKMT_OPENNTHANDLEFROMNAME open_name = { };
+    open_name.dwDesiredAccess = dwDesiredAccess;
+    open_name.pObjAttrib      = &attr;
+
+    if (D3DKMTOpenNtHandleFromName(&open_name) || !open_name.hNtHandle) {
+      Logger::warn(str::format("D3D11Device::OpenSharedResourceByName: name not found: ",
+                               dxvk::str::fromws(lpName)));
+      return E_INVALIDARG;
+    }
+
+    HRESULT hr = OpenSharedResource1(open_name.hNtHandle, returnedInterface, ppResource);
+    CloseHandle(open_name.hNtHandle);
+    return hr;
   }
 
 
@@ -3707,13 +3743,31 @@ namespace dxvk {
           IDXGIVkSurfaceFactory*    pSurfaceFactory,
     const DXGI_SWAP_CHAIN_DESC1*    pDesc,
           IDXGIVkSwapChain**        ppSwapChain) {
+    return CreateSwapChainInternal(pSurfaceFactory, pDesc, false, ppSwapChain);
+  }
+
+
+  HRESULT STDMETHODCALLTYPE DXGIVkSwapChainFactory::CreateSwapChainForComposition(
+          IDXGIVkSurfaceFactory*    pSurfaceFactory,
+    const DXGI_SWAP_CHAIN_DESC1*    pDesc,
+          IDXGIVkSwapChain**        ppSwapChain) {
+    return CreateSwapChainInternal(pSurfaceFactory, pDesc, true, ppSwapChain);
+  }
+
+
+  HRESULT DXGIVkSwapChainFactory::CreateSwapChainInternal(
+          IDXGIVkSurfaceFactory*    pSurfaceFactory,
+    const DXGI_SWAP_CHAIN_DESC1*    pDesc,
+          bool                      IsComposition,
+          IDXGIVkSwapChain**        ppSwapChain) {
     InitReturnPtr(ppSwapChain);
 
-    try {
-      auto vki = m_device->GetDXVKDevice()->adapter()->vki();
+    if (!ppSwapChain || !pSurfaceFactory || !pDesc)
+      return DXGI_ERROR_INVALID_CALL;
 
+    try {
       Com<D3D11SwapChain> presenter = new D3D11SwapChain(
-        m_container, m_device, pSurfaceFactory, pDesc);
+        m_container, m_device, pSurfaceFactory, pDesc, IsComposition);
       
       *ppSwapChain = presenter.ref();
       return S_OK;
@@ -3843,7 +3897,8 @@ namespace dxvk {
       return S_OK;
     }
 
-    if (riid == __uuidof(IDXGIVkSwapChainFactory)) {
+    if (riid == __uuidof(IDXGIVkSwapChainFactory)
+     || riid == __uuidof(IDXGIVkCompositionSwapChainFactory)) {
       *ppvObject = ref(&m_dxvkFactory);
       return S_OK;
     }

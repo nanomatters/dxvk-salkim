@@ -845,7 +845,7 @@ namespace dxvk {
   /**
    * \brief DXVK swap chain factory
    */
-  class DXGIVkSwapChainFactory : public IDXGIVkSwapChainFactory {
+  class DXGIVkSwapChainFactory : public IDXGIVkCompositionSwapChainFactory {
 
   public:
 
@@ -866,7 +866,18 @@ namespace dxvk {
       const DXGI_SWAP_CHAIN_DESC1*    pDesc,
             IDXGIVkSwapChain**        ppSwapChain);
 
+    HRESULT STDMETHODCALLTYPE CreateSwapChainForComposition(
+            IDXGIVkSurfaceFactory*    pSurfaceFactory,
+      const DXGI_SWAP_CHAIN_DESC1*    pDesc,
+            IDXGIVkSwapChain**        ppSwapChain);
+
   private:
+
+    HRESULT CreateSwapChainInternal(
+            IDXGIVkSurfaceFactory*    pSurfaceFactory,
+      const DXGI_SWAP_CHAIN_DESC1*    pDesc,
+            bool                      IsComposition,
+            IDXGIVkSwapChain**        ppSwapChain);
 
     D3D11DXGIDevice* m_container;
     D3D11Device*     m_device;

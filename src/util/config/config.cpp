@@ -50,16 +50,6 @@ namespace dxvk {
     { R"(\\BrightMemory_EP1-Win64-Shipping\.exe$)", {{
       { "dxvk.hideIntegratedGraphics",      "True" },
     }} },
-    /* AC Shadows: Uses composition swapchain to   *
-     * check for HDR support                       */
-    { R"(\\ACShadows\.exe$)", {{
-      { "dxgi.enableDummyCompositionSwapchain", "True" }
-    }} },
-    /* Anno 117: Uses composition swapchain        */
-    { R"(\\Anno117\.exe$)", {{
-      { "dxgi.enableDummyCompositionSwapchain", "True" }
-    }} },
-
     /**********************************************/
     /* D3D11 GAMES                                */
     /**********************************************/

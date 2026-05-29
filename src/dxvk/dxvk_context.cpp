@@ -1229,6 +1229,68 @@ namespace dxvk {
   }
 
 
+  void DxvkContext::acquireExternalImageQueueFamily(
+    const Rc<DxvkImage>&            image,
+          uint32_t                  srcQueueFamily,
+          VkImageLayout             layout) {
+    endCurrentPass(true);
+    flushBarriers();
+    flushImageLayoutTransitions(DxvkCmdBuffer::InitBarriers);
+
+    VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+    barrier.srcAccessMask = 0u;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    barrier.oldLayout = layout;
+    barrier.newLayout = layout;
+    barrier.srcQueueFamilyIndex = srcQueueFamily;
+    barrier.dstQueueFamilyIndex = m_device->queues().graphics.queueFamily;
+    barrier.image = image->handle();
+    barrier.subresourceRange = image->getAvailableSubresources();
+
+    if (image->info().flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) {
+      barrier.subresourceRange.baseArrayLayer = 0u;
+      barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+    }
+
+    getBarrierBatch(DxvkCmdBuffer::InitBarriers).addImageBarrier(barrier);
+  }
+
+
+  void DxvkContext::releaseExternalImageQueueFamily(
+    const Rc<DxvkImage>&            image,
+          uint32_t                  dstQueueFamily,
+          VkImageLayout             layout) {
+    endCurrentPass(true);
+    flushBarriers();
+    flushImageLayoutTransitions(DxvkCmdBuffer::ExecBuffer);
+
+    VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
+    barrier.dstAccessMask = 0u;
+    barrier.oldLayout = layout;
+    barrier.newLayout = layout;
+    barrier.srcQueueFamilyIndex = m_device->queues().graphics.queueFamily;
+    barrier.dstQueueFamilyIndex = dstQueueFamily;
+    barrier.image = image->handle();
+    barrier.subresourceRange = image->getAvailableSubresources();
+
+    if (image->info().flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) {
+      barrier.subresourceRange.baseArrayLayer = 0u;
+      barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+    }
+
+    VkDependencyInfo depInfo = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+    depInfo.imageMemoryBarrierCount = 1u;
+    depInfo.pImageMemoryBarriers = &barrier;
+
+    m_cmd->cmdPipelineBarrier(DxvkCmdBuffer::ExecBuffer, &depInfo);
+  }
+
+
 
   void DxvkContext::generateMipmaps(
     const Rc<DxvkImageView>&        imageView,
@@ -4697,6 +4759,9 @@ namespace dxvk {
     }
 
     if (!(dstImage.info().usage & VK_IMAGE_USAGE_STORAGE_BIT)) {
+      if (!dstImage.canRelocate())
+        return false;
+
       auto formatFeatures = m_device->adapter()->getFormatFeatures(dstFormat);
       auto features = dstImage.info().tiling == VK_IMAGE_TILING_LINEAR ? formatFeatures.linear : formatFeatures.optimal;
 

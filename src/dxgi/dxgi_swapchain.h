@@ -21,8 +21,8 @@ namespace dxvk {
   class DxgiDevice;
   class DxgiFactory;
   class DxgiOutput;
-  
-  class DxgiSwapChain : public DxgiObject<IDXGISwapChain4> {
+  class DxgiSwapChain : public DxgiObject<IDXGISwapChain4>,
+                        public IWineDXGICompositionDmabufExport {
     
   public:
     
@@ -32,9 +32,14 @@ namespace dxvk {
             HWND                        hWnd,
       const DXGI_SWAP_CHAIN_DESC1*      pDesc,
       const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*  pFullscreenDesc,
+            IDXGIOutput*                pRestrictToOutput,
             IUnknown*                   pDevice);
     
     ~DxgiSwapChain();
+
+    ULONG STDMETHODCALLTYPE AddRef();
+
+    ULONG STDMETHODCALLTYPE Release();
     
     HRESULT STDMETHODCALLTYPE QueryInterface(
             REFIID                    riid,
@@ -170,6 +175,21 @@ namespace dxvk {
     HRESULT STDMETHODCALLTYPE SetGammaControl(
             UINT                      NumPoints,
       const DXGI_RGB*                 pGammaCurve);
+
+    HRESULT STDMETHODCALLTYPE GetCompositionDmabuf(
+      const wine_dxgi_dcomp_dmabuf_host_caps* pCaps,
+            UINT                              ExpectedPresentCount,
+            wine_dxgi_dmabuf_desc*            pDesc,
+            int*                              pDmabufFd,
+            int*                              pAcquireSyncFd) final;
+
+    HRESULT STDMETHODCALLTYPE ReleaseCompositionDmabuf(
+            UINT64                            ReleaseToken,
+            UINT                              ReleaseFlags) final;
+
+    HRESULT STDMETHODCALLTYPE PoisonCompositionDmabufRing(
+            UINT                              CapFeedbackGen,
+            UINT                              HostOrphanSeq) final;
     
   private:
     
@@ -179,6 +199,7 @@ namespace dxvk {
     Com<DxgiFactory>                m_factory;
     Com<IDXGIAdapter>               m_adapter;
     Com<IDXGIOutput1>               m_target;
+    Com<IDXGIOutput>                m_restrictOutput;
     Com<IDXGIVkMonitorInfo>         m_monitorInfo;
     
     HWND                            m_window;
@@ -190,6 +211,7 @@ namespace dxvk {
     Com<IDXGIVkSwapChain>           m_presenter;
     Com<IDXGIVkSwapChain1>          m_presenter1;
     Com<IDXGIVkSwapChain2>          m_presenter2;
+        Com<IDXGIVkSwapChain3>          m_presenter3;
     
     HMONITOR                        m_monitor;
     bool                            m_monitorHasOutput = true;
@@ -203,6 +225,8 @@ namespace dxvk {
     bool                            m_is_d3d12;
 
     DXGI_COLOR_SPACE_TYPE           m_colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+    DXGI_VK_HDR_METADATA            m_hdrMetadata = { DXGI_HDR_METADATA_TYPE_NONE };
+        UINT64                          m_hwndDmabufPendingReleaseToken = 0u;
 
     uint32_t                        m_globalHDRStateSerial = 0;
     bool                            m_hasLatencyControl = false;
@@ -247,6 +271,9 @@ namespace dxvk {
 
     void UpdateTargetFrameRate(
             UINT                    SyncInterval);
+
+    void PublishHwndDmabuf(
+            UINT                    PresentCount);
 
     HRESULT STDMETHODCALLTYPE PresentBase(
             UINT                      SyncInterval,

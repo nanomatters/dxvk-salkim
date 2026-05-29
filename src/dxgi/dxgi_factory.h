@@ -209,6 +209,7 @@ namespace dxvk {
       const DXGI_SWAP_CHAIN_DESC1* pDesc,
       const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc,
             IDXGIOutput*          pRestrictToOutput,
+            bool                  IsComposition,
             IDXGISwapChain1**     ppSwapChain);
   };
   

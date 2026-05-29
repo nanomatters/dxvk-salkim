@@ -4,9 +4,265 @@
 
 #include "../util/util_misc.h"
 
+#include <atomic>
 #include <d3d12.h>
 
 namespace dxvk {
+
+  namespace {
+
+    constexpr UINT WineDxgiPresentDirtyRectsVersion = 1;
+    constexpr UINT WineDxgiPresentDirtyRectsMax = 16;
+    constexpr UINT WineDxgiDmabufDirtyRectsMax = 7;
+
+    const GUID WineDxgiPresentDirtyRectsGuid = {
+      0x5f78c2d4, 0x4e9a, 0x4f4b,
+      { 0x9d, 0x5e, 0x91, 0xd4, 0xa6, 0x0f, 0x37, 0x42 }
+    };
+
+    struct WineDxgiPresentDirtyRects {
+      UINT version;
+      UINT present_count;
+      UINT width;
+      UINT height;
+      UINT dirty_count;
+      RECT dirty_rects[WineDxgiPresentDirtyRectsMax];
+    };
+
+    static_assert(sizeof(WineDxgiPresentDirtyRects) == 276,
+      "Wine DXGI dirty rect metadata layout must match Wine's dxgi_dcomp.h");
+
+    WineDxgiPresentDirtyRects initWineDxgiPresentDirtyInfo(
+            UINT                      width,
+            UINT                      height) {
+      WineDxgiPresentDirtyRects dirtyInfo = { };
+      dirtyInfo.version = WineDxgiPresentDirtyRectsVersion;
+      dirtyInfo.width = width;
+      dirtyInfo.height = height;
+      return dirtyInfo;
+    }
+
+
+    bool isRectEmpty(const RECT& rect) {
+      return rect.left >= rect.right || rect.top >= rect.bottom;
+    }
+
+
+    bool clipRectToSwapChain(
+            RECT*                     rect,
+            UINT                      width,
+            UINT                      height) {
+      rect->left   = std::max<LONG>(rect->left, 0);
+      rect->top    = std::max<LONG>(rect->top, 0);
+      rect->right  = std::min<LONG>(rect->right,  LONG(width));
+      rect->bottom = std::min<LONG>(rect->bottom, LONG(height));
+
+      return !isRectEmpty(*rect);
+    }
+
+
+    void unionRect(
+            RECT*                     dst,
+      const RECT&                     src) {
+      if (isRectEmpty(*dst)) {
+        *dst = src;
+        return;
+      }
+
+      dst->left   = std::min(dst->left,   src.left);
+      dst->top    = std::min(dst->top,    src.top);
+      dst->right  = std::max(dst->right,  src.right);
+      dst->bottom = std::max(dst->bottom, src.bottom);
+    }
+
+
+    bool getWineDxgiPresentDirtyRects(
+      const DXGI_PRESENT_PARAMETERS*  pPresentParameters,
+            UINT                      width,
+            UINT                      height,
+            WineDxgiPresentDirtyRects* dirtyInfo) {
+      RECT bounds = { 0, 0, 0, 0 };
+      bool overflow = false;
+
+      *dirtyInfo = initWineDxgiPresentDirtyInfo(width, height);
+
+      if (!pPresentParameters
+       || !pPresentParameters->DirtyRectsCount
+       || !pPresentParameters->pDirtyRects)
+        return false;
+
+      if (pPresentParameters->pScrollRect || pPresentParameters->pScrollOffset)
+        return false;
+
+      for (UINT i = 0; i < pPresentParameters->DirtyRectsCount; i++) {
+        RECT dirtyRect = pPresentParameters->pDirtyRects[i];
+
+        if (!clipRectToSwapChain(&dirtyRect, width, height))
+          continue;
+
+        unionRect(&bounds, dirtyRect);
+
+        if (!overflow && dirtyInfo->dirty_count < WineDxgiPresentDirtyRectsMax)
+          dirtyInfo->dirty_rects[dirtyInfo->dirty_count++] = dirtyRect;
+        else
+          overflow = true;
+      }
+
+      if (!dirtyInfo->dirty_count)
+        return false;
+
+      if (overflow) {
+        dirtyInfo->dirty_count = 1;
+        dirtyInfo->dirty_rects[0] = bounds;
+      }
+
+      return true;
+    }
+
+
+    bool wineDxgiDmabufDirtyRectFits(
+      const RECT&                     rect) {
+      return rect.left   >= 0 && rect.top    >= 0
+          && rect.right  >= 0 && rect.bottom >= 0
+          && rect.left   <= 0xffff && rect.top    <= 0xffff
+          && rect.right  <= 0xffff && rect.bottom <= 0xffff;
+    }
+
+
+    void setWineDxgiDmabufDirtyRect(
+            wine_dxgi_dmabuf_desc*    desc,
+            UINT                      index,
+      const RECT&                     rect) {
+      desc->dirty_rects[index][0] = UINT16(rect.left);
+      desc->dirty_rects[index][1] = UINT16(rect.top);
+      desc->dirty_rects[index][2] = UINT16(rect.right);
+      desc->dirty_rects[index][3] = UINT16(rect.bottom);
+    }
+
+
+    bool setWineDxgiDmabufDirtyRects(
+            wine_dxgi_dmabuf_desc*    desc,
+      const WineDxgiPresentDirtyRects& dirtyInfo) {
+      if (dirtyInfo.version != WineDxgiPresentDirtyRectsVersion
+       || dirtyInfo.present_count != desc->present_count
+       || dirtyInfo.width != desc->width
+       || dirtyInfo.height != desc->height
+       || !dirtyInfo.dirty_count
+       || dirtyInfo.dirty_count > WineDxgiPresentDirtyRectsMax)
+        return false;
+
+      if (dirtyInfo.dirty_count > WineDxgiDmabufDirtyRectsMax) {
+        RECT bounds = dirtyInfo.dirty_rects[0];
+
+        for (UINT i = 1; i < dirtyInfo.dirty_count; i++)
+          unionRect(&bounds, dirtyInfo.dirty_rects[i]);
+
+        if (isRectEmpty(bounds) || !wineDxgiDmabufDirtyRectFits(bounds))
+          return false;
+
+        setWineDxgiDmabufDirtyRect(desc, 0, bounds);
+        desc->dirty_count = 1u;
+        return true;
+      }
+
+      for (UINT i = 0; i < dirtyInfo.dirty_count; i++) {
+        const RECT& rect = dirtyInfo.dirty_rects[i];
+
+        if (isRectEmpty(rect) || !wineDxgiDmabufDirtyRectFits(rect))
+          return false;
+      }
+
+      for (UINT i = 0; i < dirtyInfo.dirty_count; i++)
+        setWineDxgiDmabufDirtyRect(desc, i, dirtyInfo.dirty_rects[i]);
+
+      desc->dirty_count = dirtyInfo.dirty_count;
+      return true;
+    }
+
+
+    using PFN_NtUserGetHwndDmabufCaps = UINT (WINAPI *) (HWND, void*, void*, UINT, UINT*);
+    using PFN_NtUserPublishHwndDmabuf = UINT (WINAPI *) (HWND, int, int, const void*, UINT*);
+
+    struct WineHwndDmabufFuncs {
+      PFN_NtUserGetHwndDmabufCaps getCaps = nullptr;
+      PFN_NtUserPublishHwndDmabuf publish = nullptr;
+      bool resolved = false;
+    };
+
+    WineHwndDmabufFuncs& getWineHwndDmabufFuncs() {
+      static WineHwndDmabufFuncs funcs;
+
+      if (funcs.resolved)
+        return funcs;
+
+      funcs.resolved = true;
+      HMODULE win32u = ::GetModuleHandleW(L"win32u.dll");
+
+      if (!win32u)
+        return funcs;
+
+      funcs.getCaps = reinterpret_cast<PFN_NtUserGetHwndDmabufCaps>(
+        ::GetProcAddress(win32u, "NtUserGetHwndDmabufCaps"));
+      funcs.publish = reinterpret_cast<PFN_NtUserPublishHwndDmabuf>(
+        ::GetProcAddress(win32u, "NtUserPublishHwndDmabuf"));
+      return funcs;
+    }
+
+
+    bool getWineHwndDmabufCaps(
+            HWND                              hwnd,
+            wine_dxgi_dcomp_dmabuf_host_caps* caps,
+            std::vector<wine_dxgi_dcomp_dmabuf_format_modifier>* formatModifiers) {
+      WineHwndDmabufFuncs& funcs = getWineHwndDmabufFuncs();
+
+      if (!funcs.getCaps || !funcs.publish)
+        return false;
+
+      UINT formatModifierCount = 0u;
+      UINT status = funcs.getCaps(hwnd, caps, nullptr, 0u, &formatModifierCount);
+
+      if (status != WINE_HWND_DMABUF_OK || !formatModifierCount)
+        return false;
+
+      formatModifiers->resize(formatModifierCount);
+      status = funcs.getCaps(hwnd, caps, formatModifiers->data(), formatModifierCount, &formatModifierCount);
+
+      return status == WINE_HWND_DMABUF_OK
+          && caps->format_modifiers
+          && caps->format_modifier_count;
+    }
+
+
+    wine_hwnd_dmabuf_desc convertWineHwndDmabufDesc(
+      const wine_dxgi_dmabuf_desc&            desc) {
+      wine_hwnd_dmabuf_desc hwndDesc = { };
+
+      hwndDesc.version = WINE_HWND_DMABUF_DESC_VERSION_V1;
+      hwndDesc.flags = desc.desc_flags;
+      hwndDesc.width = desc.width;
+      hwndDesc.height = desc.height;
+      hwndDesc.fourcc = desc.fourcc;
+      hwndDesc.stride = desc.stride;
+      hwndDesc.offset = desc.offset;
+      hwndDesc.frame_seq = desc.frame_seq;
+      hwndDesc.ring_generation = desc.ring_generation;
+      hwndDesc.image_id = desc.image_id;
+      hwndDesc.sync_fd_kind = desc.sync_fd_kind;
+      hwndDesc.dirty_count = desc.dirty_count;
+      std::memcpy(hwndDesc.dirty_rects, desc.dirty_rects, sizeof(hwndDesc.dirty_rects));
+      hwndDesc.modifier = desc.modifier;
+      hwndDesc.producer_unique_id = desc.producer_unique_id;
+      hwndDesc.sync_timeline_point = desc.sync_timeline_point;
+      hwndDesc.release_token = desc.release_token;
+      hwndDesc.dxgi_format = desc.dxgi_format;
+      hwndDesc.alpha_mode = desc.alpha_mode;
+      hwndDesc.color_space = desc.color_space;
+      hwndDesc.hdr_metadata_type = desc.hdr_metadata_type;
+      hwndDesc.hdr_metadata = desc.hdr_metadata;
+      return hwndDesc;
+    }
+
+  }
   
   DxgiSwapChain::DxgiSwapChain(
           DxgiFactory*                pFactory,
@@ -14,16 +270,27 @@ namespace dxvk {
           HWND                        hWnd,
     const DXGI_SWAP_CHAIN_DESC1*      pDesc,
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*  pFullscreenDesc,
+          IDXGIOutput*                pRestrictToOutput,
           IUnknown*                   pDevice)
   : m_factory   (pFactory),
+    m_restrictOutput(pRestrictToOutput),
     m_window    (hWnd),
     m_desc      (*pDesc),
     m_descFs    (*pFullscreenDesc),
     m_presentId (0u),
     m_presenter (pPresenter),
-    m_monitor   (wsi::getWindowMonitor(m_window)),
+    m_monitor   (nullptr),
     m_is_d3d12(SUCCEEDED(pDevice->QueryInterface(__uuidof(ID3D12CommandQueue), reinterpret_cast<void**>(&Com<ID3D12CommandQueue>())))),
-    m_destructionNotifier(this) {
+    m_destructionNotifier(static_cast<IDXGISwapChain4*>(this)) {
+
+    if (m_window) {
+      m_monitor = wsi::getWindowMonitor(m_window);
+    } else if (m_restrictOutput != nullptr) {
+      DXGI_OUTPUT_DESC outputDesc;
+
+      if (SUCCEEDED(m_restrictOutput->GetDesc(&outputDesc)))
+        m_monitor = outputDesc.Monitor;
+    }
 
     if (FAILED(m_presenter->GetAdapter(__uuidof(IDXGIAdapter), reinterpret_cast<void**>(&m_adapter))))
       throw DxvkError("DXGI: Failed to get adapter for present device");
@@ -32,6 +299,7 @@ namespace dxvk {
     // may fail e.g. with older vkd3d-proton builds.
     m_presenter->QueryInterface(__uuidof(IDXGIVkSwapChain1), reinterpret_cast<void**>(&m_presenter1));
     m_presenter->QueryInterface(__uuidof(IDXGIVkSwapChain2), reinterpret_cast<void**>(&m_presenter2));
+    m_presenter->QueryInterface(__uuidof(IDXGIVkSwapChain3), reinterpret_cast<void**>(&m_presenter3));
 
     m_frameRateOption = m_factory->GetOptions()->maxFrameRate;
 
@@ -69,8 +337,17 @@ namespace dxvk {
       ReleaseMonitorData();
     }
   }
-  
-  
+
+
+  ULONG STDMETHODCALLTYPE DxgiSwapChain::AddRef() {
+    return DxgiObject<IDXGISwapChain4>::AddRef();
+  }
+
+
+  ULONG STDMETHODCALLTYPE DxgiSwapChain::Release() {
+    return DxgiObject<IDXGISwapChain4>::Release();
+  }
+
   HRESULT STDMETHODCALLTYPE DxgiSwapChain::QueryInterface(REFIID riid, void** ppvObject) {
     if (ppvObject == nullptr)
       return E_POINTER;
@@ -85,12 +362,22 @@ namespace dxvk {
      || riid == __uuidof(IDXGISwapChain2)
      || riid == __uuidof(IDXGISwapChain3)
      || riid == __uuidof(IDXGISwapChain4)) {
-      *ppvObject = ref(this);
+      *ppvObject = ref(static_cast<IDXGISwapChain4*>(this));
       return S_OK;
     }
 
     if (riid == __uuidof(ID3DDestructionNotifier)) {
       *ppvObject = ref(&m_destructionNotifier);
+      return S_OK;
+    }
+
+    if (riid == __uuidof(IWineDXGICompositionDmabufExport)) {
+      Com<IWineDXGICompositionDmabufExport> presenterExport;
+
+      if (FAILED(m_presenter->QueryInterface(riid, reinterpret_cast<void**>(&presenterExport))))
+        return E_NOINTERFACE;
+
+      *ppvObject = ref(static_cast<IWineDXGICompositionDmabufExport*>(this));
       return S_OK;
     }
     
@@ -125,9 +412,18 @@ namespace dxvk {
   
   HRESULT STDMETHODCALLTYPE DxgiSwapChain::GetContainingOutput(IDXGIOutput** ppOutput) {
     InitReturnPtr(ppOutput);
+
+    if (ppOutput == nullptr)
+      return E_INVALIDARG;
     
-    if (!wsi::isWindow(m_window))
+    if (!m_window || !wsi::isWindow(m_window)) {
+      if (m_restrictOutput != nullptr) {
+        *ppOutput = m_restrictOutput.ref();
+        return S_OK;
+      }
+
       return DXGI_ERROR_INVALID_CALL;
+    }
     
     Com<IDXGIOutput1> output;
 
@@ -192,9 +488,12 @@ namespace dxvk {
   HRESULT STDMETHODCALLTYPE DxgiSwapChain::GetRestrictToOutput(
           IDXGIOutput**             ppRestrictToOutput) {
     InitReturnPtr(ppRestrictToOutput);
+
+    if (ppRestrictToOutput == nullptr)
+      return E_INVALIDARG;
     
-    Logger::err("DxgiSwapChain::GetRestrictToOutput: Not implemented");
-    return E_NOTIMPL;
+    *ppRestrictToOutput = m_restrictOutput.ref();
+    return S_OK;
   }
   
   
@@ -263,7 +562,7 @@ namespace dxvk {
           IDXGIOutput** ppTarget) {
     HRESULT hr = S_OK;
 
-    if (!m_is_d3d12 && !m_descFs.Windowed && wsi::isOccluded(m_window))
+    if (m_window && !m_is_d3d12 && !m_descFs.Windowed && wsi::isOccluded(m_window))
       SetFullscreenState(FALSE, nullptr);
     if (pFullscreen != nullptr)
       *pFullscreen = !m_descFs.Windowed;
@@ -346,9 +645,9 @@ namespace dxvk {
     if (SyncInterval > 4)
       return DXGI_ERROR_INVALID_CALL;
 
-    if ((m_desc.SwapEffect == DXGI_SWAP_EFFECT_DISCARD || m_desc.SwapEffect == DXGI_SWAP_EFFECT_SEQUENTIAL) && wsi::isMinimized(m_window))
+    if (m_window && (m_desc.SwapEffect == DXGI_SWAP_EFFECT_DISCARD || m_desc.SwapEffect == DXGI_SWAP_EFFECT_SEQUENTIAL) && wsi::isMinimized(m_window))
       return DXGI_STATUS_OCCLUDED;
-    bool occluded = !m_descFs.Windowed && wsi::isOccluded(m_window) && !wsi::isMinimized(m_window);
+    bool occluded = m_window && !m_descFs.Windowed && wsi::isOccluded(m_window) && !wsi::isMinimized(m_window);
 
     auto options = m_factory->GetOptions();
 
@@ -362,10 +661,61 @@ namespace dxvk {
 
     std::lock_guard<dxvk::recursive_mutex> lockWin(m_lockWindow);
     HRESULT hr = S_OK;
+    WineDxgiPresentDirtyRects presentDirtyInfo = initWineDxgiPresentDirtyInfo(
+      m_desc.Width, m_desc.Height);
+    UINT publishedPresentCount = 0u;
+    uint32_t presentDiagId = UINT32_MAX;
 
-    if (wsi::isWindow(m_window) || !m_window) {
+    if (m_window && !m_is_d3d12) {
+      static std::atomic<uint32_t> presentAttemptCounter = 0u;
+      presentDiagId = presentAttemptCounter.fetch_add(1u, std::memory_order_relaxed) + 1u;
+
+      if (presentDiagId <= 16u) {
+        Logger::info(str::format("DxgiSwapChain::PresentBase: begin id=", presentDiagId,
+          " sync=", SyncInterval,
+          " flags=", PresentFlags,
+          " nextPresentId=", m_presentId + 1,
+          " occluded=", occluded));
+      }
+    }
+
+    if (!m_window || wsi::isWindow(m_window)) {
       std::lock_guard<dxvk::mutex> lockBuf(m_lockBuffer);
+
+      if (!(PresentFlags & DXGI_PRESENT_TEST))
+        getWineDxgiPresentDirtyRects(pPresentParameters,
+          m_desc.Width, m_desc.Height, &presentDirtyInfo);
+
+      if (!(PresentFlags & DXGI_PRESENT_TEST) && m_presenter3) {
+        wine_dxgi_dcomp_dmabuf_host_caps caps = { };
+        std::vector<wine_dxgi_dcomp_dmabuf_format_modifier> formatModifiers;
+        BOOL hwndDmabufPresent = m_window && !m_is_d3d12
+          && getWineHwndDmabufCaps(m_window, &caps, &formatModifiers);
+
+        m_presenter3->SetHwndDmabufPresentMode(hwndDmabufPresent);
+      }
+
       hr = m_presenter->Present(SyncInterval, PresentFlags, nullptr);
+
+      if (presentDiagId <= 16u) {
+        Logger::info(str::format("DxgiSwapChain::PresentBase: after presenter id=", presentDiagId,
+          " hr=", hr));
+      }
+
+      if (!(PresentFlags & DXGI_PRESENT_TEST) && hr == S_OK) {
+        UINT presentCount = 0;
+
+        if (SUCCEEDED(GetLastPresentCount(&presentCount))) {
+          presentDirtyInfo.present_count = presentCount;
+          this->SetPrivateData(WineDxgiPresentDirtyRectsGuid, sizeof(presentDirtyInfo), &presentDirtyInfo);
+          publishedPresentCount = presentCount;
+
+          if (presentDiagId <= 16u) {
+            Logger::info(str::format("DxgiSwapChain::PresentBase: counted id=", presentDiagId,
+              " presentCount=", presentCount));
+          }
+        }
+      }
     }
 
     if (PresentFlags & DXGI_PRESENT_TEST)
@@ -396,6 +746,23 @@ namespace dxvk {
         if (!(PresentFlags & DXGI_PRESENT_TEST))
           SetFullscreenState(FALSE, nullptr);
         hr = DXGI_STATUS_OCCLUDED;
+      }
+    }
+
+    if (hr == S_OK && publishedPresentCount)
+      PublishHwndDmabuf(publishedPresentCount);
+
+    if (m_window && !m_is_d3d12) {
+      static std::atomic<uint32_t> loggedPresentDiagnostics = 0u;
+      uint32_t diagIndex = loggedPresentDiagnostics.fetch_add(1u, std::memory_order_relaxed);
+
+      if (diagIndex < 16u) {
+        Logger::info(str::format("DxgiSwapChain::PresentBase: hr=", hr,
+          " sync=", SyncInterval,
+          " flags=", PresentFlags,
+          " presentId=", m_presentId,
+          " publishedPresentCount=", publishedPresentCount,
+          " occluded=", occluded));
       }
     }
 
@@ -462,7 +829,7 @@ namespace dxvk {
     if (!pNewTargetParameters)
       return DXGI_ERROR_INVALID_CALL;
     
-    if (!wsi::isWindow(m_window))
+    if (!m_window || !wsi::isWindow(m_window))
       return DXGI_ERROR_INVALID_CALL;
 
     // Promote display mode
@@ -694,7 +1061,12 @@ namespace dxvk {
     }
 
     std::lock_guard<dxvk::mutex> lock(m_lockBuffer);
-    return m_presenter->SetHDRMetaData(&metadata);
+    HRESULT hr = m_presenter->SetHDRMetaData(&metadata);
+
+    if (SUCCEEDED(hr))
+      m_hdrMetadata = metadata;
+
+    return hr;
   }
   
   
@@ -706,6 +1078,143 @@ namespace dxvk {
   }
 
 
+  void DxgiSwapChain::PublishHwndDmabuf(UINT PresentCount) {
+    if (!m_window || m_is_d3d12)
+      return;
+
+    if (PresentCount <= 8u)
+      Logger::info(str::format("DxgiSwapChain::PublishHwndDmabuf: begin present=", PresentCount));
+
+    WineHwndDmabufFuncs& funcs = getWineHwndDmabufFuncs();
+
+    if (!funcs.publish)
+    {
+      if (PresentCount <= 8u)
+        Logger::info(str::format("DxgiSwapChain::PublishHwndDmabuf: unavailable present=", PresentCount));
+      return;
+    }
+
+    wine_dxgi_dcomp_dmabuf_host_caps caps = { };
+    std::vector<wine_dxgi_dcomp_dmabuf_format_modifier> formatModifiers;
+
+    if (!getWineHwndDmabufCaps(m_window, &caps, &formatModifiers))
+    {
+      if (PresentCount <= 8u)
+        Logger::info(str::format("DxgiSwapChain::PublishHwndDmabuf: no caps present=", PresentCount));
+      return;
+    }
+
+    wine_dxgi_dmabuf_desc dxgiDesc = { };
+    int dmabufFd = -1;
+    int acquireSyncFd = -1;
+    HRESULT hr = GetCompositionDmabuf(&caps, PresentCount, &dxgiDesc, &dmabufFd, &acquireSyncFd);
+
+    if (FAILED(hr))
+    {
+      if (PresentCount <= 8u)
+        Logger::info(str::format("DxgiSwapChain::PublishHwndDmabuf: export skipped present=", PresentCount,
+          " hr=", hr));
+      return;
+    }
+
+    wine_hwnd_dmabuf_desc hwndDesc = convertWineHwndDmabufDesc(dxgiDesc);
+    UINT frameSeq = 0u;
+    UINT status = funcs.publish(m_window, dmabufFd, acquireSyncFd, &hwndDesc, &frameSeq);
+
+    if (status == WINE_HWND_DMABUF_OK) {
+      if (frameSeq <= 8u) {
+        Logger::info(str::format("DxgiSwapChain::PublishHwndDmabuf: published frameSeq=", frameSeq,
+          " present=", dxgiDesc.present_count, " releaseToken=", dxgiDesc.release_token,
+          " generation=", dxgiDesc.ring_generation));
+      }
+
+      if (m_hwndDmabufPendingReleaseToken)
+        ReleaseCompositionDmabuf(m_hwndDmabufPendingReleaseToken, WINE_DXGI_DMABUF_RELEASE_OK);
+
+      m_hwndDmabufPendingReleaseToken = dxgiDesc.release_token;
+      return;
+    }
+
+    Logger::warn(str::format("DxgiSwapChain::PublishHwndDmabuf: NtUserPublishHwndDmabuf failed status=", status,
+      " present=", dxgiDesc.present_count, " releaseToken=", dxgiDesc.release_token,
+      " generation=", dxgiDesc.ring_generation));
+
+    ReleaseCompositionDmabuf(dxgiDesc.release_token,
+      status == WINE_HWND_DMABUF_INVALID_ARGS
+        ? WINE_DXGI_DMABUF_RELEASE_FAILED
+        : WINE_DXGI_DMABUF_RELEASE_DROPPED);
+  }
+
+
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::GetCompositionDmabuf(
+    const wine_dxgi_dcomp_dmabuf_host_caps* pCaps,
+          UINT                              ExpectedPresentCount,
+          wine_dxgi_dmabuf_desc*            pDesc,
+          int*                              pDmabufFd,
+          int*                              pAcquireSyncFd) {
+    Com<IWineDXGICompositionDmabufExport> presenterExport;
+    HRESULT hr = m_presenter->QueryInterface(__uuidof(IWineDXGICompositionDmabufExport),
+      reinterpret_cast<void**>(&presenterExport));
+
+    if (FAILED(hr))
+      return hr;
+
+    std::lock_guard<dxvk::mutex> lockBuf(m_lockBuffer);
+
+    hr = presenterExport->GetCompositionDmabuf(pCaps,
+      ExpectedPresentCount, pDesc, pDmabufFd, pAcquireSyncFd);
+
+    if (SUCCEEDED(hr) && pDesc) {
+      if (pDesc->version >= WINE_DXGI_DMABUF_DESC_VERSION_V2) {
+        pDesc->dxgi_format = m_desc.Format;
+        pDesc->alpha_mode = m_desc.AlphaMode == DXGI_ALPHA_MODE_UNSPECIFIED
+          ? DXGI_ALPHA_MODE_IGNORE
+          : m_desc.AlphaMode;
+        pDesc->color_space = m_colorSpace;
+        pDesc->hdr_metadata_type = m_hdrMetadata.Type;
+
+        if (m_hdrMetadata.Type == DXGI_HDR_METADATA_TYPE_HDR10)
+          pDesc->hdr_metadata = m_hdrMetadata.HDR10;
+      }
+
+      WineDxgiPresentDirtyRects dirtyInfo = { };
+      UINT dirtyInfoSize = sizeof(dirtyInfo);
+
+      if (SUCCEEDED(this->GetPrivateData(WineDxgiPresentDirtyRectsGuid, &dirtyInfoSize, &dirtyInfo)))
+        setWineDxgiDmabufDirtyRects(pDesc, dirtyInfo);
+    }
+
+    return hr;
+  }
+
+
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::ReleaseCompositionDmabuf(
+          UINT64                            ReleaseToken,
+          UINT                              ReleaseFlags) {
+    Com<IWineDXGICompositionDmabufExport> presenterExport;
+    HRESULT hr = m_presenter->QueryInterface(__uuidof(IWineDXGICompositionDmabufExport),
+      reinterpret_cast<void**>(&presenterExport));
+
+    if (FAILED(hr))
+      return hr;
+
+    return presenterExport->ReleaseCompositionDmabuf(ReleaseToken, ReleaseFlags);
+  }
+
+
+  HRESULT STDMETHODCALLTYPE DxgiSwapChain::PoisonCompositionDmabufRing(
+          UINT                              CapFeedbackGen,
+          UINT                              HostOrphanSeq) {
+    Com<IWineDXGICompositionDmabufExport> presenterExport;
+    HRESULT hr = m_presenter->QueryInterface(__uuidof(IWineDXGICompositionDmabufExport),
+      reinterpret_cast<void**>(&presenterExport));
+
+    if (FAILED(hr))
+      return hr;
+
+    return presenterExport->PoisonCompositionDmabufRing(CapFeedbackGen, HostOrphanSeq);
+  }
+
   HRESULT DxgiSwapChain::EnterFullscreenMode(IDXGIOutput1* pTarget) {
     if (m_ModeChangeInProgress) {
       Logger::warn("Nested EnterFullscreenMode");
@@ -715,7 +1224,7 @@ namespace dxvk {
 
     Com<IDXGIOutput1> output = pTarget;
 
-    if (!wsi::isWindow(m_window))
+    if (!m_window || !wsi::isWindow(m_window))
       return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
     
     if (output == nullptr) {
@@ -798,9 +1307,9 @@ namespace dxvk {
     // Restore internal state
     m_descFs.Windowed = TRUE;
     m_target  = nullptr;
-    m_monitor = wsi::getWindowMonitor(m_window);
+    m_monitor = m_window ? wsi::getWindowMonitor(m_window) : nullptr;
     
-    if (!wsi::isWindow(m_window))
+    if (!m_window || !wsi::isWindow(m_window))
       return S_OK;
     
     if (!wsi::leaveFullscreenMode(m_window, &m_windowState)) {
@@ -1041,7 +1550,7 @@ namespace dxvk {
       m_frameRateSyncInterval = SyncInterval;
       m_frameRateRefresh = 0.0f;
 
-      if (engageLimiter && wsi::isWindow(m_window)) {
+      if (engageLimiter && m_window && wsi::isWindow(m_window)) {
         wsi::WsiMode mode = { };
 
         if (wsi::getCurrentDisplayMode(wsi::getWindowMonitor(m_window), &mode)) {

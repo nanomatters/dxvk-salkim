@@ -67,10 +67,13 @@ namespace dxvk {
     VkPhysicalDeviceDescriptorBufferFeaturesEXT               extDescriptorBuffer             = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT };
     VkPhysicalDeviceDescriptorHeapFeaturesEXT                 extDescriptorHeap               = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT };
     VkPhysicalDeviceExtendedDynamicState3FeaturesEXT          extExtendedDynamicState3        = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT };
+    VkBool32                                                  extExternalMemoryDmaBuf         = VK_FALSE;
+    VkBool32                                                  extQueueFamilyForeign           = VK_FALSE;
     VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT        extFragmentShaderInterlock      = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT };
     VkBool32                                                  extFullScreenExclusive          = VK_FALSE;
     VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT        extGraphicsPipelineLibrary      = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT };
     VkBool32                                                  extHdrMetadata                  = VK_FALSE;
+    VkBool32                                                  extImageDrmFormatModifier       = VK_FALSE;
     VkPhysicalDeviceLineRasterizationFeaturesEXT              extLineRasterization            = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_LINE_RASTERIZATION_FEATURES_EXT };
     VkBool32                                                  extMemoryBudget                 = VK_FALSE;
     VkPhysicalDeviceMemoryPriorityFeaturesEXT                 extMemoryPriority               = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT };
@@ -86,6 +89,7 @@ namespace dxvk {
     VkPhysicalDeviceTransformFeedbackFeaturesEXT              extTransformFeedback            = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT };
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT         extVertexAttributeDivisor       = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES };
     VkPhysicalDeviceDynamicRenderingLocalReadFeatures         khrDynamicRenderingLocalRead    = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR };
+    VkBool32                                                  khrExternalMemoryFd             = VK_FALSE;
     VkBool32                                                  khrExternalMemoryWin32          = VK_FALSE;
     VkBool32                                                  khrExternalSemaphoreWin32       = VK_FALSE;
     VkBool32                                                  khrLoadStoreOpNone              = VK_FALSE;
@@ -138,10 +142,13 @@ namespace dxvk {
     VkExtensionProperties extDescriptorBuffer               = vk::makeExtension(VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME);
     VkExtensionProperties extDescriptorHeap                 = vk::makeExtension(VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME);
     VkExtensionProperties extExtendedDynamicState3          = vk::makeExtension(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
+    VkExtensionProperties extExternalMemoryDmaBuf           = vk::makeExtension(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+    VkExtensionProperties extQueueFamilyForeign             = vk::makeExtension(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
     VkExtensionProperties extFragmentShaderInterlock        = vk::makeExtension(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME);
     VkExtensionProperties extFullScreenExclusive            = vk::makeExtension(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME);
     VkExtensionProperties extGraphicsPipelineLibrary        = vk::makeExtension(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
     VkExtensionProperties extHdrMetadata                    = vk::makeExtension(VK_EXT_HDR_METADATA_EXTENSION_NAME);
+    VkExtensionProperties extImageDrmFormatModifier         = vk::makeExtension(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME);
     VkExtensionProperties extLineRasterization              = vk::makeExtension(VK_EXT_LINE_RASTERIZATION_EXTENSION_NAME);
     VkExtensionProperties extMemoryBudget                   = vk::makeExtension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
     VkExtensionProperties extMemoryPriority                 = vk::makeExtension(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
@@ -157,6 +164,7 @@ namespace dxvk {
     VkExtensionProperties extTransformFeedback              = vk::makeExtension(VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME);
     VkExtensionProperties extVertexAttributeDivisor         = vk::makeExtension(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
     VkExtensionProperties khrDynamicRenderingLocalRead      = vk::makeExtension(VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME);
+    VkExtensionProperties khrExternalMemoryFd               = vk::makeExtension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
     VkExtensionProperties khrExternalMemoryWin32            = vk::makeExtension(VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME);
     VkExtensionProperties khrExternalSemaphoreWin32         = vk::makeExtension(VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
     VkExtensionProperties khrLoadStoreOpNone                = vk::makeExtension(VK_KHR_LOAD_STORE_OP_NONE_EXTENSION_NAME);

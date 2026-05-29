@@ -10,6 +10,21 @@
 
 namespace dxvk {
 
+  static bool isWin32ExternalMemoryHandleType(VkExternalMemoryHandleTypeFlagBits handleType) {
+    switch (handleType) {
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT:
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_KMT_BIT:
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT:
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_KMT_BIT:
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_HEAP_BIT:
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT:
+        return true;
+
+      default:
+        return false;
+    }
+  }
+
   void DxvkMemoryChunk::addAllocation(DxvkResourceAllocation* allocation) {
     allocation->m_nextInChunk = allocationList;
 
@@ -1253,7 +1268,7 @@ namespace dxvk {
       }
     }
 
-    if (allocationInfo.handleType != VK_EXTERNAL_MEMORY_HANDLE_TYPE_FLAG_BITS_MAX_ENUM)
+    if (isWin32ExternalMemoryHandleType(allocationInfo.handleType))
       allocation->initKmtHandles(allocationInfo.handleType);
 
     return allocation;

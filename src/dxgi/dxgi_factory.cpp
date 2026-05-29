@@ -14,6 +14,28 @@ namespace dxvk {
   static dxvk::mutex               s_globalHDRStateMutex;
   static DXVK_VK_GLOBAL_HDR_STATE  s_globalHDRState{};
 
+  static bool IsValidCompositionSwapChainDesc(const DXGI_SWAP_CHAIN_DESC1* pDesc) {
+    if (pDesc->Width == 0 || pDesc->Height == 0)
+      return false;
+
+    if (pDesc->BufferCount < 2 || pDesc->BufferCount > DXGI_MAX_SWAP_CHAIN_BUFFERS)
+      return false;
+
+    if (pDesc->Stereo)
+      return false;
+
+    if (pDesc->SampleDesc.Count != 1 || pDesc->SampleDesc.Quality != 0)
+      return false;
+
+    if (pDesc->AlphaMode != DXGI_ALPHA_MODE_UNSPECIFIED
+     && pDesc->AlphaMode != DXGI_ALPHA_MODE_PREMULTIPLIED
+     && pDesc->AlphaMode != DXGI_ALPHA_MODE_IGNORE)
+      return false;
+
+    return pDesc->SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
+        || pDesc->SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD;
+  }
+
   DxgiVkFactory::DxgiVkFactory(DxgiFactory* pFactory)
   : m_factory(pFactory) {
 
@@ -239,7 +261,7 @@ namespace dxvk {
     IDXGISwapChain1* swapChain = nullptr;
 
     HRESULT hr = CreateSwapChainBase(pDevice,
-      pDesc->OutputWindow, &desc, &descFs, nullptr, &swapChain);
+      pDesc->OutputWindow, &desc, &descFs, nullptr, false, &swapChain);
 
     *ppSwapChain = swapChain;
     return hr;
@@ -259,7 +281,7 @@ namespace dxvk {
       return DXGI_ERROR_INVALID_CALL;
 
     return CreateSwapChainBase(pDevice, hWnd,
-      pDesc, pFullscreenDesc, pRestrictToOutput,
+      pDesc, pFullscreenDesc, pRestrictToOutput, false,
       ppSwapChain);
   }
 
@@ -284,15 +306,16 @@ namespace dxvk {
           IDXGISwapChain1**     ppSwapChain) {
     InitReturnPtr(ppSwapChain);
 
-    if (!m_options.enableDummyCompositionSwapchain) {
-      Logger::err("DxgiFactory::CreateSwapChainForComposition: Not implemented");
-      return E_NOTIMPL;
-    }
+    if (!ppSwapChain || !pDesc || !pDevice)
+      return DXGI_ERROR_INVALID_CALL;
 
-    Logger::warn("DxgiFactory::CreateSwapChainForComposition: Creating dummy swap chain");
+    if (!IsValidCompositionSwapChainDesc(pDesc))
+      return DXGI_ERROR_INVALID_CALL;
+
+    Logger::warn("DxgiFactory::CreateSwapChainForComposition: Creating composition swap chain");
 
     return CreateSwapChainBase(pDevice,
-      nullptr, pDesc, nullptr, pRestrictToOutput, ppSwapChain);
+      nullptr, pDesc, nullptr, pRestrictToOutput, true, ppSwapChain);
   }
   
   
@@ -525,7 +548,16 @@ namespace dxvk {
     const DXGI_SWAP_CHAIN_DESC1* pDesc,
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc,
           IDXGIOutput*          pRestrictToOutput,
+          bool                  IsComposition,
           IDXGISwapChain1**     ppSwapChain) {
+    InitReturnPtr(ppSwapChain);
+
+    if (!ppSwapChain || !pDesc || !pDevice)
+      return DXGI_ERROR_INVALID_CALL;
+
+    if (IsComposition && !IsValidCompositionSwapChainDesc(pDesc))
+      return DXGI_ERROR_INVALID_CALL;
+
     // Make sure the back buffer size is not zero
     DXGI_SWAP_CHAIN_DESC1 desc = *pDesc;
 
@@ -551,24 +583,39 @@ namespace dxvk {
     // Probe various modes to create the swap chain object
     Com<IDXGISwapChain4> frontendSwapChain;
 
-    Com<IDXGIVkSwapChainFactory> dxvkFactory;
-
-    if (SUCCEEDED(pDevice->QueryInterface(IID_PPV_ARGS(&dxvkFactory)))) {
+    {
       Com<IDXGIVkSurfaceFactory> surfaceFactory = new DxgiSurfaceFactory(
         m_instance->vki()->getLoaderProc(), hWnd);
 
       Com<IDXGIVkSwapChain> presenter;
-      HRESULT hr = dxvkFactory->CreateSwapChain(surfaceFactory.ptr(), &desc, &presenter);
+      HRESULT hr = S_OK;
+
+      if (IsComposition) {
+        Com<IDXGIVkCompositionSwapChainFactory> dxvkFactory;
+
+        if (FAILED(pDevice->QueryInterface(IID_PPV_ARGS(&dxvkFactory)))) {
+          Logger::err("DXGI: CreateSwapChainForComposition: Device does not support composition swap chains");
+          return DXGI_ERROR_UNSUPPORTED;
+        }
+
+        hr = dxvkFactory->CreateSwapChainForComposition(surfaceFactory.ptr(), &desc, &presenter);
+      } else {
+        Com<IDXGIVkSwapChainFactory> dxvkFactory;
+
+        if (FAILED(pDevice->QueryInterface(IID_PPV_ARGS(&dxvkFactory)))) {
+          Logger::err("DXGI: CreateSwapChainForHwnd: Unsupported device type");
+          return DXGI_ERROR_UNSUPPORTED;
+        }
+
+        hr = dxvkFactory->CreateSwapChain(surfaceFactory.ptr(), &desc, &presenter);
+      }
 
       if (FAILED(hr)) {
-        Logger::err(str::format("DXGI: CreateSwapChainForHwnd: Failed to create swap chain, hr ", hr));
+        Logger::err(str::format("DXGI: Failed to create swap chain, hr ", hr));
         return hr;
       }
 
-      frontendSwapChain = new DxgiSwapChain(this, presenter.ptr(), hWnd, &desc, &fsDesc, pDevice);
-    } else {
-      Logger::err("DXGI: CreateSwapChainForHwnd: Unsupported device type");
-      return DXGI_ERROR_UNSUPPORTED;
+      frontendSwapChain = new DxgiSwapChain(this, presenter.ptr(), hWnd, &desc, &fsDesc, pRestrictToOutput, pDevice);
     }
 
     // Wrap object in swap chain dispatcher

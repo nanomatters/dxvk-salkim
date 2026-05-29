@@ -79,6 +79,11 @@ namespace dxvk {
     return -1;
   }
 
+  NTSTATUS WINAPI D3DKMTOpenNtHandleFromName(D3DKMT_OPENNTHANDLEFROMNAME *desc) {
+    Logger::warn("D3DKMTOpenNtHandleFromName: Not available on this platform.");
+    return -1;
+  }
+
   NTSTATUS WINAPI D3DKMTOpenSynchronizationObject(D3DKMT_OPENSYNCHRONIZATIONOBJECT *desc) {
     Logger::warn("D3DKMTOpenSynchronizationObject: Not available on this platform.");
     return -1;

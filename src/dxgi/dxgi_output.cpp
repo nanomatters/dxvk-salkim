@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <numeric>
+#include <thread>
 
 #include <cstdlib>
 #include <cstring>
@@ -487,8 +488,10 @@ namespace dxvk {
 
     m_monitorInfo->ReleaseMonitorData();
 
-    // Sleep until the given time point
-    Sleep::sleepUntil(t1, t2);
+    // Avoid Sleep::sleepUntil here; its busy-spin tail is expensive
+    // for Chromium's vsync polling on Wine.
+    if (t2 > t1)
+      std::this_thread::sleep_for(t2 - t1);
     return S_OK;
   }
   

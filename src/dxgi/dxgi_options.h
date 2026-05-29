@@ -46,9 +46,6 @@ namespace dxvk {
     /// Enable HDR
     bool enableHDR;
 
-    /// Enable support for dummy composition swapchains
-    bool enableDummyCompositionSwapchain;
-
     /// Limit frame rate
     int32_t maxFrameRate;
 

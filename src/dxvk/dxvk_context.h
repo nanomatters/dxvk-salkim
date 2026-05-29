@@ -834,6 +834,30 @@ namespace dxvk {
             VkImageLayout             layout);
 
     /**
+     * \brief Acquires an external image from another queue family
+     *
+     * \param [in] image Image to acquire
+     * \param [in] srcQueueFamily Previous queue family owner
+     * \param [in] layout External image layout
+     */
+    void acquireExternalImageQueueFamily(
+      const Rc<DxvkImage>&            image,
+            uint32_t                  srcQueueFamily,
+            VkImageLayout             layout);
+
+    /**
+     * \brief Releases an image to another queue family
+     *
+     * \param [in] image Image to release
+     * \param [in] dstQueueFamily New queue family owner
+     * \param [in] layout External image layout
+     */
+    void releaseExternalImageQueueFamily(
+      const Rc<DxvkImage>&            image,
+            uint32_t                  dstQueueFamily,
+            VkImageLayout             layout);
+
+    /**
      * \brief Generates mip maps
      * 
      * Uses blitting to generate lower mip levels from
