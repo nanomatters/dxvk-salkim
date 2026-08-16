@@ -32,6 +32,10 @@ namespace dxvk::hud {
     virtual void update(
             dxvk::high_resolution_clock::time_point time);
 
+    virtual bool supportsHorizontalLayout() const {
+      return true;
+    }
+
     /**
      * \brief Renders the HUD
      *
@@ -100,12 +104,7 @@ namespace dxvk::hud {
      */
     template<typename T, typename... Args>
     Rc<T> add(const char* name, int32_t at, Args... args) {
-      bool enable = m_enableFull;
-
-      if (!enable) {
-        auto entry = m_enabled.find(name);
-        enable = entry != m_enabled.end();
-      }
+      bool enable = isEnabled(name);
 
       if (at < 0 || at > int32_t(m_items.size()))
         at = m_items.size();
@@ -118,6 +117,14 @@ namespace dxvk::hud {
       }
 
       return item;
+    }
+
+    bool isEnabled(const char* name) const {
+      return m_enableFull || m_enabled.find(name) != m_enabled.end();
+    }
+
+    bool hasFlag(const char* name) const {
+      return m_enabled.find(name) != m_enabled.end();
     }
 
     template<typename T>
@@ -214,6 +221,79 @@ namespace dxvk::hud {
 
 
   /**
+   * \brief HUD item to display system info
+   */
+  class HudSystemInfoItem : public HudItem {
+
+  public:
+
+    enum Field : uint32_t {
+      Cpu     = 1u << 0,
+      Proton  = 1u << 1,
+      Wine    = 1u << 2,
+      WinSys  = 1u << 3,
+      All     = Cpu | Proton | Wine | WinSys,
+    };
+
+    HudSystemInfoItem(uint32_t fields);
+
+    HudPos render(
+      const Rc<DxvkCommandList>&ctx,
+      const HudPipelineKey&     key,
+      const HudOptions&         options,
+            HudRenderer&        renderer,
+            HudPos              position);
+
+  private:
+
+    struct Line {
+      std::string label;
+      std::string value;
+    };
+
+    std::vector<Line> m_lines;
+
+  };
+
+
+  /**
+   * \brief HUD item to display GPU info
+   */
+  class HudGpuInfoItem : public HudItem {
+    constexpr static int64_t UpdateInterval = 500'000;
+
+  public:
+
+    enum Field : uint32_t {
+      Name        = 1u << 0,
+      Temperature = 1u << 1,
+      Power       = 1u << 2,
+    };
+
+    HudGpuInfoItem(const Rc<DxvkDevice>& device, uint32_t fields);
+
+    void update(dxvk::high_resolution_clock::time_point time);
+
+    HudPos render(
+      const Rc<DxvkCommandList>&ctx,
+      const HudPipelineKey&     key,
+      const HudOptions&         options,
+            HudRenderer&        renderer,
+            HudPos              position);
+
+  private:
+
+    uint32_t m_fields;
+    D3DKMT_HANDLE m_adapter;
+    std::string m_deviceName;
+    std::string m_temperature = "--";
+    std::string m_power = "--";
+    dxvk::high_resolution_clock::time_point m_lastUpdate;
+
+  };
+
+
+  /**
    * \brief HUD item to display the frame rate
    */
   class HudFpsItem : public HudItem {
@@ -257,6 +337,10 @@ namespace dxvk::hud {
             HudRenderer*        renderer);
 
     ~HudFrameTimeItem();
+
+    bool supportsHorizontalLayout() const override {
+      return false;
+    }
 
     HudPos render(
       const Rc<DxvkCommandList>&ctx,
@@ -544,6 +628,10 @@ namespace dxvk::hud {
 
     ~HudMemoryDetailsItem();
 
+    bool supportsHorizontalLayout() const override {
+      return false;
+    }
+
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
@@ -707,6 +795,10 @@ namespace dxvk::hud {
     HudCompilerActivityItem(const Rc<DxvkDevice>& device);
 
     ~HudCompilerActivityItem();
+
+    bool supportsHorizontalLayout() const override {
+      return false;
+    }
 
     void update(dxvk::high_resolution_clock::time_point time);
 

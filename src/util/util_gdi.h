@@ -189,6 +189,64 @@ namespace dxvk {
       D3DKMT_HANDLE hAdapter;
   } D3DKMT_OPENADAPTERFROMLUID;
 
+  typedef enum _KMTQUERYADAPTERINFOTYPE
+  {
+      KMTQAITYPE_ADAPTERPERFDATA = 62,
+      KMTQAITYPE_ADAPTERPERFDATA_CAPS = 63,
+      KMTQAITYPE_WINE_PERFDATA = 0x80000000,
+  } KMTQUERYADAPTERINFOTYPE;
+
+  typedef struct _D3DKMT_ADAPTER_PERFDATA
+  {
+      UINT32 PhysicalAdapterIndex;
+      ULONGLONG MemoryFrequency;
+      ULONGLONG MaxMemoryFrequency;
+      ULONGLONG MaxMemoryFrequencyOC;
+      ULONGLONG MemoryBandwidth;
+      ULONGLONG PCIEBandwidth;
+      ULONG FanRPM;
+      ULONG Power;
+      ULONG Temperature;
+      UCHAR PowerStateOverride;
+  } D3DKMT_ADAPTER_PERFDATA;
+
+  typedef struct _D3DKMT_ADAPTER_PERFDATACAPS
+  {
+      UINT32 PhysicalAdapterIndex;
+      ULONGLONG MaxMemoryBandwidth;
+      ULONGLONG MaxPCIEBandwidth;
+      ULONG MaxFanRPM;
+      ULONG TemperatureMax;
+      ULONG TemperatureWarning;
+  } D3DKMT_ADAPTER_PERFDATACAPS;
+
+#define D3DKMT_WINE_PERFDATA_GPU_POWER       0x00000001
+#define D3DKMT_WINE_PERFDATA_GPU_TEMPERATURE 0x00000002
+#define D3DKMT_WINE_PERFDATA_V1_SIZE          32
+
+  typedef struct _D3DKMT_WINE_PERFDATA
+  {
+      UINT32 PhysicalAdapterIndex;
+      UINT32 Requested;
+      UINT32 Valid;
+      UINT32 Reserved;
+      ULONGLONG GpuPowerMicrowatts;
+      ULONG GpuTemperatureDeciCelsius;
+      ULONG Reserved2;
+  } D3DKMT_WINE_PERFDATA;
+
+  typedef struct _D3DKMT_QUERYADAPTERINFO
+  {
+      D3DKMT_HANDLE hAdapter;
+      KMTQUERYADAPTERINFOTYPE Type;
+      VOID *pPrivateDriverData;
+      UINT PrivateDriverDataSize;
+  } D3DKMT_QUERYADAPTERINFO;
+
+  static_assert(sizeof(D3DKMT_ADAPTER_PERFDATA) == 64);
+  static_assert(sizeof(D3DKMT_ADAPTER_PERFDATACAPS) == 40);
+  static_assert(sizeof(D3DKMT_WINE_PERFDATA) == D3DKMT_WINE_PERFDATA_V1_SIZE);
+
   typedef struct _D3DKMT_OPENKEYEDMUTEX
   {
       D3DKMT_HANDLE hSharedHandle;
@@ -446,6 +504,7 @@ namespace dxvk {
   EXTERN_C WINBASEAPI NTSTATUS WINAPI D3DKMTOpenResourceFromNtHandle(D3DKMT_OPENRESOURCEFROMNTHANDLE *desc);
   EXTERN_C WINBASEAPI NTSTATUS WINAPI D3DKMTOpenSynchronizationObject(D3DKMT_OPENSYNCHRONIZATIONOBJECT *desc);
   EXTERN_C WINBASEAPI NTSTATUS WINAPI D3DKMTOpenSyncObjectFromNtHandle(D3DKMT_OPENSYNCOBJECTFROMNTHANDLE *desc);
+  EXTERN_C WINBASEAPI NTSTATUS WINAPI D3DKMTQueryAdapterInfo(D3DKMT_QUERYADAPTERINFO *desc);
   EXTERN_C WINBASEAPI NTSTATUS WINAPI D3DKMTQueryResourceInfo(D3DKMT_QUERYRESOURCEINFO *desc);
   EXTERN_C WINBASEAPI NTSTATUS WINAPI D3DKMTQueryResourceInfoFromNtHandle(D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE *desc);
   NTSTATUS WINAPI D3DKMTReleaseKeyedMutex(D3DKMT_RELEASEKEYEDMUTEX *desc);

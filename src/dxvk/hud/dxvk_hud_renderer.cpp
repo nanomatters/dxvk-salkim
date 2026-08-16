@@ -3,6 +3,9 @@
 #include <hud_text_frag.h>
 #include <hud_text_vert.h>
 
+#include <algorithm>
+#include <limits>
+
 namespace dxvk::hud {
   
   struct HudGlyphGpuData {
@@ -109,6 +112,83 @@ namespace dxvk::hud {
 
     m_textData.resize(draw.textOffset + draw.textLength);
     std::memcpy(&m_textData[draw.textOffset], text.data(), draw.textLength);
+  }
+
+
+  uint32_t HudRenderer::textWidth(
+          uint32_t            size,
+    const std::string&        text) const {
+    return textWidth(size, text.size());
+  }
+
+
+  uint32_t HudRenderer::textWidth(
+          uint32_t            size,
+          size_t              length) const {
+    return uint32_t((uint64_t(size) * g_hudFont.advance * length
+      + g_hudFont.size - 1u) / g_hudFont.size);
+  }
+
+
+  void HudRenderer::arrangeText(
+          size_t              firstDraw,
+          bool                center) {
+    constexpr int32_t gap = 24;
+
+    if (firstDraw >= m_textDraws.size())
+      return;
+
+    int32_t totalWidth = -gap;
+
+    for (size_t i = firstDraw; i < m_textDraws.size();) {
+      int16_t y = m_textDraws[i].posY;
+      int32_t left = m_textDraws[i].posX;
+      int32_t right = left;
+      size_t j = i;
+
+      while (j < m_textDraws.size() && m_textDraws[j].posY == y) {
+        left = std::min<int32_t>(left, m_textDraws[j].posX);
+        right = std::max<int32_t>(right, m_textDraws[j].posX
+          + textWidth(m_textDraws[j].fontSize, m_textDraws[j].textLength));
+        j += 1;
+      }
+
+      totalWidth += right - left + gap;
+      i = j;
+    }
+
+    int32_t x = 8;
+
+    if (center) {
+      int32_t surfaceWidth = int32_t(float(m_pushConstants.surfaceSize.width)
+        / m_pushConstants.scale);
+      x = std::max(8, (surfaceWidth - totalWidth) / 2);
+    }
+
+    for (size_t i = firstDraw; i < m_textDraws.size();) {
+      int16_t y = m_textDraws[i].posY;
+      int32_t left = m_textDraws[i].posX;
+      int32_t right = left;
+      size_t j = i;
+
+      while (j < m_textDraws.size() && m_textDraws[j].posY == y) {
+        left = std::min<int32_t>(left, m_textDraws[j].posX);
+        right = std::max<int32_t>(right, m_textDraws[j].posX
+          + textWidth(m_textDraws[j].fontSize, m_textDraws[j].textLength));
+        j += 1;
+      }
+
+      for (size_t k = i; k < j; k++) {
+        int32_t drawX = x + m_textDraws[k].posX - left;
+        m_textDraws[k].posX = int16_t(std::clamp(drawX,
+          int32_t(std::numeric_limits<int16_t>::min()),
+          int32_t(std::numeric_limits<int16_t>::max())));
+        m_textDraws[k].posY = 24;
+      }
+
+      x += right - left + gap;
+      i = j;
+    }
   }
 
 

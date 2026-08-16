@@ -1,4 +1,5 @@
 #include "dxvk_hud_item.h"
+#include "dxvk_hud_info.h"
 
 #include <hud_chunk_frag_background.h>
 #include <hud_chunk_frag_visualize.h>
@@ -81,10 +82,28 @@ namespace dxvk::hud {
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer) {
-    HudPos position = { 8, 8 };
+    if (!options.horizontal) {
+      HudPos position = { 8, 8 };
 
-    for (const auto& item : m_items)
-      position = item->render(ctx, key, options, renderer, position);
+      for (const auto& item : m_items)
+        position = item->render(ctx, key, options, renderer, position);
+    } else {
+      size_t firstDraw = renderer.textDrawCount();
+      HudPos position = { 0, 0 };
+
+      for (const auto& item : m_items) {
+        if (item->supportsHorizontalLayout())
+          position = item->render(ctx, key, options, renderer, position);
+      }
+
+      renderer.arrangeText(firstDraw, options.center);
+      position = { 8, 8 };
+
+      for (const auto& item : m_items) {
+        if (!item->supportsHorizontalLayout())
+          position = item->render(ctx, key, options, renderer, position);
+      }
+    }
   }
 
 
@@ -104,7 +123,7 @@ namespace dxvk::hud {
           HudRenderer&        renderer,
           HudPos              position) {
     position.y += 16;
-    renderer.drawText(16, position, 0xffffffffu, "DXVK " DXVK_VERSION);
+    renderer.drawText(16, position, 0xff40ffffu, "DXVK " DXVK_VERSION);
 
     position.y += 8;
     return position;
@@ -131,7 +150,7 @@ namespace dxvk::hud {
     std::lock_guard lock(m_mutex);
 
     position.y += 16;
-    renderer.drawText(16, position, 0xffffffffu, m_api);
+    renderer.drawText(16, position, 0xff40ffffu, m_api);
 
     position.y += 8;
     return position;
@@ -147,13 +166,138 @@ namespace dxvk::hud {
       driverInfo = props.driverVersion.toString();
 
     m_deviceName = props.core.properties.deviceName;
-    m_driverName = str::format("Driver:  ", props.vk12.driverName);
-    m_driverVer = str::format("Version: ", driverInfo);
+    m_driverName = props.vk12.driverName;
+    m_driverVer = std::move(driverInfo);
   }
 
 
   HudDeviceInfoItem::~HudDeviceInfoItem() {
 
+  }
+
+
+  HudSystemInfoItem::HudSystemInfoItem(uint32_t fields) {
+    const auto& info = HudSystemInfo::get();
+
+    if ((fields & Cpu) && !info.cpuName.empty())
+      m_lines.push_back({ "CPU: ", info.cpuName });
+    if ((fields & Proton) && !info.protonBuild.empty())
+      m_lines.push_back({ "Proton: ", info.protonBuild });
+    if ((fields & Wine) && !info.wineVersion.empty()) {
+      std::string wine = info.wineVersion;
+      if (!info.wineBuild.empty())
+        wine = str::format(wine, " (", info.wineBuild, ")");
+      m_lines.push_back({ "Wine: ", std::move(wine) });
+    }
+    if ((fields & WinSys) && !info.displayBackend.empty())
+      m_lines.push_back({ "Window system: ", info.displayBackend });
+  }
+
+
+  HudPos HudSystemInfoItem::render(
+    const Rc<DxvkCommandList>&ctx,
+    const HudPipelineKey&     key,
+    const HudOptions&         options,
+          HudRenderer&        renderer,
+          HudPos              position) {
+    for (const auto& line : m_lines) {
+      position.y += 20;
+      renderer.drawText(16, position, 0xff40ffffu, line.label);
+      renderer.drawText(16,
+        { position.x + int32_t(renderer.textWidth(16, line.label)), position.y },
+        0xffffffffu, line.value);
+    }
+
+    position.y += 8;
+    return position;
+  }
+
+
+  HudGpuInfoItem::HudGpuInfoItem(const Rc<DxvkDevice>& device, uint32_t fields)
+  : m_fields(fields),
+    m_adapter(device->adapter()->kmtLocal()),
+    m_deviceName(device->properties().core.properties.deviceName) {
+
+  }
+
+
+  void HudGpuInfoItem::update(dxvk::high_resolution_clock::time_point time) {
+    if (!(m_fields & (Temperature | Power)))
+      return;
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(time - m_lastUpdate);
+
+    if (elapsed.count() < UpdateInterval)
+      return;
+
+    D3DKMT_WINE_PERFDATA data = { };
+    D3DKMT_QUERYADAPTERINFO query = { };
+
+    if (m_fields & Temperature) {
+      data.Requested |= D3DKMT_WINE_PERFDATA_GPU_TEMPERATURE;
+      m_temperature = "--";
+    }
+    if (m_fields & Power) {
+      data.Requested |= D3DKMT_WINE_PERFDATA_GPU_POWER;
+      m_power = "--";
+    }
+
+    query.hAdapter = m_adapter;
+    query.Type = KMTQAITYPE_WINE_PERFDATA;
+    query.pPrivateDriverData = &data;
+    query.PrivateDriverDataSize = sizeof(data);
+
+    bool haveTelemetry = m_adapter && D3DKMTQueryAdapterInfo(&query) >= 0;
+
+    if (haveTelemetry) {
+      if (data.Valid & D3DKMT_WINE_PERFDATA_GPU_TEMPERATURE) {
+        m_temperature = str::format(data.GpuTemperatureDeciCelsius / 10, ".",
+          data.GpuTemperatureDeciCelsius % 10, " C");
+      }
+
+      if (data.Valid & D3DKMT_WINE_PERFDATA_GPU_POWER) {
+        uint64_t deciwatts = (data.GpuPowerMicrowatts + 50'000) / 100'000;
+        m_power = str::format(deciwatts / 10, ".", deciwatts % 10, " W");
+      }
+    }
+
+    if ((m_fields & Temperature) && !haveTelemetry) {
+      D3DKMT_ADAPTER_PERFDATA fallback = { };
+      query.Type = KMTQAITYPE_ADAPTERPERFDATA;
+      query.pPrivateDriverData = &fallback;
+      query.PrivateDriverDataSize = sizeof(fallback);
+
+      if (m_adapter && D3DKMTQueryAdapterInfo(&query) >= 0 && fallback.Temperature)
+        m_temperature = str::format(fallback.Temperature / 10, ".", fallback.Temperature % 10, " C");
+    }
+
+    m_lastUpdate = time;
+  }
+
+
+  HudPos HudGpuInfoItem::render(
+    const Rc<DxvkCommandList>&ctx,
+    const HudPipelineKey&     key,
+    const HudOptions&         options,
+          HudRenderer&        renderer,
+          HudPos              position) {
+    auto drawLine = [&] (const char* label, const std::string& value) {
+      position.y += 20;
+      renderer.drawText(16, position, 0xff40ffffu, label);
+      renderer.drawText(16,
+        { position.x + int32_t(renderer.textWidth(16, label)), position.y },
+        0xffffffffu, value);
+    };
+
+    if (m_fields & Name)
+      drawLine("GPU: ", m_deviceName);
+    if (m_fields & Temperature)
+      drawLine("GPU temp: ", m_temperature);
+    if (m_fields & Power)
+      drawLine("GPU power: ", m_power);
+
+    position.y += 8;
+    return position;
   }
 
 
@@ -164,13 +308,15 @@ namespace dxvk::hud {
           HudRenderer&        renderer,
           HudPos              position) {
     position.y += 16;
-    renderer.drawText(16, position, 0xffffffffu, m_deviceName);
+    renderer.drawText(16, position, 0xff40ffffu, m_deviceName);
     
     position.y += 24;
-    renderer.drawText(16, position, 0xffffffffu, m_driverName);
+    renderer.drawText(16, position, 0xff40ffffu, "Driver:  ");
+    renderer.drawText(16, { position.x + 108, position.y }, 0xffffffffu, m_driverName);
     
     position.y += 20;
-    renderer.drawText(16, position, 0xffffffffu, m_driverVer);
+    renderer.drawText(16, position, 0xff40ffffu, "Version: ");
+    renderer.drawText(16, { position.x + 108, position.y }, 0xffffffffu, m_driverVer);
 
     position.y += 8;
     return position;

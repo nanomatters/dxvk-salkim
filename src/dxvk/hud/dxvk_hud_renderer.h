@@ -12,6 +12,8 @@ namespace dxvk::hud {
   struct HudOptions {
     float scale = 1.0f;
     float opacity = 1.0f;
+    bool horizontal = false;
+    bool center = false;
   };
 
 
@@ -106,6 +108,18 @@ namespace dxvk::hud {
             uint32_t            color,
       const std::string&        text);
 
+    uint32_t textWidth(
+            uint32_t            size,
+      const std::string&        text) const;
+
+    size_t textDrawCount() const {
+      return m_textDraws.size();
+    }
+
+    void arrangeText(
+            size_t              firstDraw,
+            bool                center);
+
     void drawTextIndirect(
       const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
@@ -131,6 +145,10 @@ namespace dxvk::hud {
       const HudSpecConstants*   constants) const;
 
   private:
+
+    uint32_t textWidth(
+            uint32_t            size,
+            size_t              length) const;
 
     Rc<DxvkDevice>          m_device;
 
