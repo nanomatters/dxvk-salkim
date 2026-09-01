@@ -1,3 +1,4 @@
+#include "dxgi_hud.h"
 #include "dxgi_factory.h"
 #include "dxgi_output.h"
 #include "dxgi_swapchain.h"
@@ -22,17 +23,30 @@ namespace dxvk {
     m_presentId (0u),
     m_presenter (pPresenter),
     m_monitor   (wsi::getWindowMonitor(m_window)),
-    m_is_d3d12(SUCCEEDED(pDevice->QueryInterface(__uuidof(ID3D12CommandQueue), reinterpret_cast<void**>(&Com<ID3D12CommandQueue>())))),
+    m_is_d3d12(false),
     m_destructionNotifier(this) {
 
     if (FAILED(m_presenter->GetAdapter(__uuidof(IDXGIAdapter), reinterpret_cast<void**>(&m_adapter))))
       throw DxvkError("DXGI: Failed to get adapter for present device");
+
+    Com<ID3D12CommandQueue> d3d12Queue;
+
+    if (SUCCEEDED(pDevice->QueryInterface(__uuidof(ID3D12CommandQueue),
+          reinterpret_cast<void**>(&d3d12Queue))))
+      m_is_d3d12 = true;
 
     // Query updated interface versions from presenter, this
     // may fail e.g. with older vkd3d-proton builds.
     m_presenter->QueryInterface(__uuidof(IDXGIVkSwapChain1), reinterpret_cast<void**>(&m_presenter1));
     m_presenter->QueryInterface(__uuidof(IDXGIVkSwapChain2), reinterpret_cast<void**>(&m_presenter2));
     m_presenter->QueryInterface(__uuidof(IDXGIVkSwapChain3), reinterpret_cast<void**>(&m_presenter3));
+
+    if (m_is_d3d12) {
+      m_presenter->QueryInterface(__uuidof(IDXGIVkSwapChainHud), reinterpret_cast<void**>(&m_presenterHud));
+
+      if (m_presenterHud)
+        m_hud = DxgiHud::create(m_adapter.ptr(), m_factory->GetDXVKInstance()->options().hud);
+    }
 
     m_frameRateOption = m_factory->GetOptions()->maxFrameRate;
 
@@ -375,6 +389,10 @@ namespace dxvk {
 
     if (wsi::isWindow(m_window) || !m_window) {
       std::lock_guard<dxvk::mutex> lockBuf(m_lockBuffer);
+
+      if (m_hud && !(PresentFlags & DXGI_PRESENT_TEST))
+        m_hud->render(m_presenterHud.ptr());
+
       hr = m_presenter->Present(SyncInterval, PresentFlags, pPresentParameters);
     }
 
