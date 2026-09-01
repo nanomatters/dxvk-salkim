@@ -134,7 +134,9 @@ namespace dxvk::hud {
 
       if (isEnabled(name)) {
         item = new T(std::forward<Args>(args)...);
+        m_itemNames.insert(m_itemNames.begin() + at, name);
         m_items.insert(m_items.begin() + at, item);
+        m_itemsOrdered = false;
       }
 
       return item;
@@ -156,11 +158,18 @@ namespace dxvk::hud {
     bool                                          m_enableFull = false;
     std::unordered_set<std::string>               m_enabled;
     std::unordered_map<std::string, std::string>  m_options;
+    std::vector<std::string>                      m_layoutTokens;
+    std::vector<std::string>                      m_itemNames;
     std::vector<Rc<HudItem>>                      m_items;
+    std::vector<size_t>                           m_itemLines;
     HudOptions                                    m_renderOptions;
     int64_t                                       m_fpsLowsWindowNs = 7'000'000'000;
+    bool                                          m_hasNewline = false;
+    bool                                          m_itemsOrdered = false;
 
     static void parseOption(const std::string& str, float& value);
+
+    void orderItems();
 
   };
 
