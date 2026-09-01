@@ -62,6 +62,8 @@ namespace dxvk::hud {
 
   public:
 
+    HudItemSet(std::string config);
+
     HudItemSet(const Rc<DxvkDevice>& device);
 
     ~HudItemSet();
@@ -83,6 +85,13 @@ namespace dxvk::hud {
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer);
+
+    void render(
+            HudRenderer&        renderer);
+
+    const HudOptions& options() const {
+      return m_renderOptions;
+    }
 
     /**
      * \brief Checks whether the item set is empty
@@ -139,6 +148,7 @@ namespace dxvk::hud {
     std::unordered_set<std::string>               m_enabled;
     std::unordered_map<std::string, std::string>  m_options;
     std::vector<Rc<HudItem>>                      m_items;
+    HudOptions                                    m_renderOptions;
 
     static void parseOption(const std::string& str, float& value);
 
@@ -196,6 +206,11 @@ namespace dxvk::hud {
   public:
 
     HudDeviceInfoItem(const Rc<DxvkDevice>& device);
+
+    HudDeviceInfoItem(
+            std::string         deviceName,
+            std::string         driverName,
+            std::string         driverVersion);
 
     ~HudDeviceInfoItem();
 
@@ -259,7 +274,7 @@ namespace dxvk::hud {
 
     HudFrameTimeItem(
       const Rc<DxvkDevice>&     device,
-            HudRenderer*        renderer);
+            HudVulkanRenderer*  renderer);
 
     ~HudFrameTimeItem();
 
@@ -302,6 +317,7 @@ namespace dxvk::hud {
     };
 
     Rc<DxvkDevice>            m_device;
+    HudVulkanRenderer*        m_renderer;
     Rc<DxvkBuffer>            m_gpuBuffer;
     Rc<DxvkBufferView>        m_textWrView;
     Rc<DxvkBufferView>        m_textRdView;
@@ -320,7 +336,7 @@ namespace dxvk::hud {
     void processFrameTimes(
       const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
-            HudRenderer&        renderer,
+            HudVulkanRenderer&  renderer,
             uint32_t            dataPoint,
             HudPos              minPos,
             HudPos              maxPos);
@@ -328,7 +344,7 @@ namespace dxvk::hud {
     void drawFrameTimeGraph(
       const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
-            HudRenderer&        renderer,
+            HudVulkanRenderer&  renderer,
             uint32_t            dataPoint,
             HudPos              graphPos,
             HudPos              graphSize);
@@ -337,16 +353,16 @@ namespace dxvk::hud {
       const Rc<DxvkCommandList>&ctx);
 
     void createComputePipeline(
-          HudRenderer&          renderer);
+          HudVulkanRenderer&    renderer);
 
     const DxvkPipelineLayout* createPipelineLayout();
 
     VkPipeline getPipeline(
-            HudRenderer&        renderer,
+            HudVulkanRenderer&  renderer,
       const HudPipelineKey&     key);
 
     VkPipeline createPipeline(
-            HudRenderer&        renderer,
+            HudVulkanRenderer&  renderer,
       const HudPipelineKey&     key);
 
     static BufferLayout computeBufferLayout();
@@ -555,7 +571,7 @@ namespace dxvk::hud {
 
     HudMemoryDetailsItem(
       const Rc<DxvkDevice>&     device,
-            HudRenderer*        renderer);
+            HudVulkanRenderer*  renderer);
 
     ~HudMemoryDetailsItem();
 
@@ -588,6 +604,7 @@ namespace dxvk::hud {
     };
 
     Rc<DxvkDevice>                    m_device;
+    HudVulkanRenderer*                m_renderer;
     DxvkMemoryAllocationStats         m_stats;
     DxvkSharedAllocationCacheStats    m_cacheStats;
 
@@ -613,7 +630,7 @@ namespace dxvk::hud {
       const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
-            HudRenderer&        renderer);
+            HudVulkanRenderer&  renderer);
 
     void updateDataBuffer(
       const Rc<DxvkCommandList>&ctx,
@@ -623,11 +640,11 @@ namespace dxvk::hud {
     const DxvkPipelineLayout* createPipelineLayout();
 
     PipelinePair createPipeline(
-            HudRenderer&        renderer,
+            HudVulkanRenderer&  renderer,
       const HudPipelineKey&     key);
 
     PipelinePair getPipeline(
-            HudRenderer&        renderer,
+            HudVulkanRenderer&  renderer,
       const HudPipelineKey&     key);
 
   };
