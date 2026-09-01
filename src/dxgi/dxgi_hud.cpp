@@ -11,6 +11,7 @@ namespace dxvk {
 
   std::unique_ptr<DxgiHud> DxgiHud::create(
           IDXGIAdapter*           adapter,
+          ID3DLowLatencyDevice*   lowLatencyDevice,
     const std::string&            fallbackConfig,
           int32_t                 fpsLowsWindow) {
     std::string configString = env::getEnvVar("DXVK_HUD");
@@ -31,7 +32,8 @@ namespace dxvk {
     }
 
     auto result = std::unique_ptr<DxgiHud>(
-      new DxgiHud(std::move(configString), std::move(deviceName), fpsLowsWindow));
+      new DxgiHud(std::move(configString), std::move(deviceName),
+        lowLatencyDevice, fpsLowsWindow));
 
     if (result->m_hudItems.empty())
       return nullptr;
@@ -44,6 +46,7 @@ namespace dxvk {
   DxgiHud::DxgiHud(
           std::string             config,
           std::string             deviceName,
+          ID3DLowLatencyDevice*   lowLatencyDevice,
           int32_t                 fpsLowsWindow)
   : m_hudItems(std::move(config), fpsLowsWindow) {
     m_hudItems.add<hud::HudVersionItem>("version", -1);
@@ -54,6 +57,7 @@ namespace dxvk {
     m_hudItems.add<hud::HudFpsLowItem>("fps_lows", -1,
       m_hudItems.fpsLowsWindowNs());
     m_hudItems.add<hud::HudClientApiItem>("api", 1, "D3D12");
+    m_hudItems.addReflexItems(lowLatencyDevice);
     m_vertices.reserve(MaxVertices);
   }
 
