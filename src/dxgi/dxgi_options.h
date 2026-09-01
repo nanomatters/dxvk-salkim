@@ -55,7 +55,7 @@ namespace dxvk {
     bool hideIntelGpu;
 
     /// Enable HDR
-    bool enableHDR;
+    Tristate enableHDR;
 
     /// Enable support for dummy composition swapchains
     bool enableDummyCompositionSwapchain;
