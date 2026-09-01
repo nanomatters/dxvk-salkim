@@ -10,6 +10,7 @@
 #include <hud_graph_frag.h>
 #include <hud_graph_vert.h>
 
+#include <algorithm>
 #include <iomanip>
 #include <version.h>
 
@@ -25,23 +26,29 @@ namespace dxvk::hud {
   }
 
 
-  HudItemSet::HudItemSet(const Rc<DxvkDevice>& device) {
+  HudItemSet::HudItemSet(const Rc<DxvkDevice>& device)
+  : HudItemSet([&] {
     std::string configStr = env::getEnvVar("DXVK_HUD");
 
     if (configStr.empty())
       configStr = device->config().hud;
 
+    return configStr;
+  }()) { }
+
+
+  HudItemSet::HudItemSet(std::string configStr) {
     std::string::size_type pos = 0;
     std::string::size_type end = 0;
     std::string::size_type mid = 0;
-    
+
     while (pos < configStr.size()) {
       end = configStr.find(',', pos);
       mid = configStr.find('=', pos);
-      
+
       if (end == std::string::npos)
         end = configStr.size();
-      
+
       if (mid != std::string::npos && mid < end) {
         m_options.insert({
           configStr.substr(pos,     mid - pos),
@@ -55,11 +62,16 @@ namespace dxvk::hud {
 
     if (m_enabled.find("full") != m_enabled.end())
       m_enableFull = true;
-    
+
     if (m_enabled.find("1") != m_enabled.end()) {
       m_enabled.insert("devinfo");
       m_enabled.insert("fps");
     }
+
+    m_renderOptions.scale = std::clamp(
+      getOption<float>("scale", 1.0f), 0.25f, 4.0f);
+    m_renderOptions.opacity = std::clamp(
+      getOption<float>("opacity", 1.0f), 0.1f, 1.0f);
   }
 
 
@@ -85,6 +97,13 @@ namespace dxvk::hud {
 
     for (const auto& item : m_items)
       position = item->render(ctx, key, options, renderer, position);
+  }
+
+
+  void HudItemSet::render(
+          HudRenderer&        renderer) {
+    render(Rc<DxvkCommandList>(), HudPipelineKey(),
+      m_renderOptions, renderer);
   }
 
 
@@ -152,6 +171,15 @@ namespace dxvk::hud {
   }
 
 
+  HudDeviceInfoItem::HudDeviceInfoItem(
+          std::string         deviceName,
+          std::string         driverName,
+          std::string         driverVersion)
+  : m_deviceName(std::move(deviceName)),
+    m_driverName(std::move(driverName)),
+    m_driverVer (std::move(driverVersion)) { }
+
+
   HudDeviceInfoItem::~HudDeviceInfoItem() {
 
   }
@@ -165,12 +193,16 @@ namespace dxvk::hud {
           HudPos              position) {
     position.y += 16;
     renderer.drawText(16, position, 0xffffffffu, m_deviceName);
-    
-    position.y += 24;
-    renderer.drawText(16, position, 0xffffffffu, m_driverName);
-    
-    position.y += 20;
-    renderer.drawText(16, position, 0xffffffffu, m_driverVer);
+
+    if (!m_driverName.empty()) {
+      position.y += 24;
+      renderer.drawText(16, position, 0xffffffffu, m_driverName);
+    }
+
+    if (!m_driverVer.empty()) {
+      position.y += 20;
+      renderer.drawText(16, position, 0xffffffffu, m_driverVer);
+    }
 
     position.y += 8;
     return position;
@@ -213,8 +245,9 @@ namespace dxvk::hud {
   }
 
 
-  HudFrameTimeItem::HudFrameTimeItem(const Rc<DxvkDevice>& device, HudRenderer* renderer)
+  HudFrameTimeItem::HudFrameTimeItem(const Rc<DxvkDevice>& device, HudVulkanRenderer* renderer)
   : m_device            (device),
+    m_renderer          (renderer),
     m_gfxPipelineLayout (createPipelineLayout()) {
     createComputePipeline(*renderer);
   }
@@ -247,10 +280,10 @@ namespace dxvk::hud {
 
     uint32_t dataPoint = m_nextDataPoint++;
 
-    processFrameTimes(ctx, key, renderer,
+    processFrameTimes(ctx, key, *m_renderer,
       dataPoint, minPos, maxPos);
 
-    drawFrameTimeGraph(ctx, key, renderer,
+    drawFrameTimeGraph(ctx, key, *m_renderer,
       dataPoint, graphPos, graphSize);
 
     if (m_nextDataPoint >= NumDataPoints)
@@ -263,7 +296,7 @@ namespace dxvk::hud {
   void HudFrameTimeItem::processFrameTimes(
     const Rc<DxvkCommandList>&ctx,
     const HudPipelineKey&     key,
-          HudRenderer&        renderer,
+          HudVulkanRenderer&  renderer,
           uint32_t            dataPoint,
           HudPos              minPos,
           HudPos              maxPos) {
@@ -365,7 +398,7 @@ namespace dxvk::hud {
   void HudFrameTimeItem::drawFrameTimeGraph(
     const Rc<DxvkCommandList>&ctx,
     const HudPipelineKey&     key,
-          HudRenderer&        renderer,
+          HudVulkanRenderer&  renderer,
           uint32_t            dataPoint,
           HudPos              graphPos,
           HudPos              graphSize) {
@@ -454,7 +487,7 @@ namespace dxvk::hud {
 
 
   void HudFrameTimeItem::createComputePipeline(
-          HudRenderer&        renderer) {
+          HudVulkanRenderer&  renderer) {
     static const std::array<DxvkDescriptorSetLayoutBinding, 4> bindings = {{
       { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,       1, VK_SHADER_STAGE_COMPUTE_BIT },
       { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,       1, VK_SHADER_STAGE_COMPUTE_BIT },
@@ -483,7 +516,7 @@ namespace dxvk::hud {
 
 
   VkPipeline HudFrameTimeItem::getPipeline(
-          HudRenderer&        renderer,
+          HudVulkanRenderer&  renderer,
     const HudPipelineKey&     key) {
     auto entry = m_gfxPipelines.find(key);
 
@@ -497,7 +530,7 @@ namespace dxvk::hud {
 
 
   VkPipeline HudFrameTimeItem::createPipeline(
-          HudRenderer&        renderer,
+          HudVulkanRenderer&  renderer,
     const HudPipelineKey&     key) {
     auto vk = m_device->vkd();
 
@@ -859,8 +892,9 @@ namespace dxvk::hud {
 
   HudMemoryDetailsItem::HudMemoryDetailsItem(
     const Rc<DxvkDevice>&     device,
-          HudRenderer*        renderer)
+          HudVulkanRenderer*  renderer)
   : m_device          (device),
+    m_renderer        (renderer),
     m_pipelineLayout  (createPipelineLayout()) {
 
   }
@@ -993,7 +1027,7 @@ namespace dxvk::hud {
       y -= 24;
     }
 
-    flushDraws(ctx, key, options, renderer);
+    flushDraws(ctx, key, options, *m_renderer);
     return position;
   }
 
@@ -1021,7 +1055,7 @@ namespace dxvk::hud {
     const Rc<DxvkCommandList>&ctx,
     const HudPipelineKey&     key,
     const HudOptions&         options,
-          HudRenderer&        renderer) {
+          HudVulkanRenderer&  renderer) {
     if (m_drawInfos.empty())
       return;
 
@@ -1122,7 +1156,7 @@ namespace dxvk::hud {
 
 
   HudMemoryDetailsItem::PipelinePair HudMemoryDetailsItem::createPipeline(
-          HudRenderer&        renderer,
+          HudVulkanRenderer&  renderer,
     const HudPipelineKey&     key) {
     auto vk = m_device->vkd();
 
@@ -1165,7 +1199,7 @@ namespace dxvk::hud {
 
 
   HudMemoryDetailsItem::PipelinePair HudMemoryDetailsItem::getPipeline(
-          HudRenderer&        renderer,
+          HudVulkanRenderer&  renderer,
     const HudPipelineKey&     key) {
     auto entry = m_pipelines.find(key);
 
