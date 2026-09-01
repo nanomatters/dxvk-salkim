@@ -31,6 +31,15 @@ namespace dxvk::hud {
 
 
 
+  uint32_t HudRenderer::textWidth(
+          uint32_t            size,
+    const std::string&        text) const {
+    return uint32_t((uint64_t(size) * g_hudFont.advance * text.size()
+      + g_hudFont.size - 1u) / g_hudFont.size);
+  }
+
+
+
   HudVulkanRenderer::HudVulkanRenderer(const Rc<DxvkDevice>& device)
   : m_device              (device),
     m_textPipelineLayout  (createPipelineLayout()) {
