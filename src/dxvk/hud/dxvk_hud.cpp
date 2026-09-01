@@ -3,7 +3,8 @@
 namespace dxvk::hud {
   
   Hud::Hud(
-    const Rc<DxvkDevice>& device)
+    const Rc<DxvkDevice>&     device,
+          ID3DLowLatencyDevice* lowLatencyDevice)
   : m_device        (device),
     m_renderer      (device),
     m_hudItems      (device) {
@@ -22,6 +23,7 @@ namespace dxvk::hud {
     addItem<HudCsThreadItem>("cs", -1, device);
     addItem<HudGpuLoadItem>("gpuload", -1, device);
     addItem<HudCompilerActivityItem>("compiler", -1, device);
+    m_hudItems.addReflexItems(lowLatencyDevice);
   }
 
 
@@ -53,8 +55,10 @@ namespace dxvk::hud {
   }
 
 
-  Rc<Hud> Hud::createHud(const Rc<DxvkDevice>& device) {
-    return new Hud(device);
+  Rc<Hud> Hud::createHud(
+    const Rc<DxvkDevice>&     device,
+          ID3DLowLatencyDevice* lowLatencyDevice) {
+    return new Hud(device, lowLatencyDevice);
   }
   
 }
