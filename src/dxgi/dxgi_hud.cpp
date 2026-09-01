@@ -54,13 +54,15 @@ namespace dxvk {
 
 
   void DxgiHud::render(
-          IDXGIVkSwapChainHud*     presenter) {
+          IDXGIVkSwapChainHud*     presenter,
+          uint32_t                 surfaceWidth,
+          uint32_t                 surfaceHeight) {
     if (m_failed)
       return;
 
     m_hudItems.update();
     m_vertices.clear();
-    m_hudItems.render(*this);
+    m_hudItems.render(*this, surfaceWidth, surfaceHeight);
 
     const auto& font = hud::g_hudFont;
     DXGI_VK_HUD_DATA data = { };

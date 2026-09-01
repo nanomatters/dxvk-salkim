@@ -21,7 +21,9 @@ namespace dxvk {
       const std::string&            fallbackConfig);
 
     void render(
-            IDXGIVkSwapChainHud*     presenter);
+            IDXGIVkSwapChainHud*     presenter,
+            uint32_t                 surfaceWidth,
+            uint32_t                 surfaceHeight);
 
   private:
 
