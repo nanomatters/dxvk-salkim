@@ -17,7 +17,9 @@ namespace dxvk::hud {
     
   public:
     
-    Hud(const Rc<DxvkDevice>& device);
+    Hud(
+      const Rc<DxvkDevice>&     device,
+            ID3DLowLatencyDevice* lowLatencyDevice);
     
     ~Hud();
 
@@ -69,7 +71,8 @@ namespace dxvk::hud {
      * \returns HUD object, if it was created.
      */
     static Rc<Hud> createHud(
-      const Rc<DxvkDevice>& device);
+      const Rc<DxvkDevice>&     device,
+            ID3DLowLatencyDevice* lowLatencyDevice = nullptr);
     
   private:
     
