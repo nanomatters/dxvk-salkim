@@ -12,6 +12,9 @@ namespace dxvk::hud {
   struct HudOptions {
     float scale = 1.0f;
     float opacity = 1.0f;
+    bool horizontal = false;
+    bool center = false;
+    bool bottom = false;
   };
 
 
