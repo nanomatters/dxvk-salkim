@@ -49,6 +49,11 @@ Manipulation of Direct3D libraries in multi-player games may be considered cheat
 ### HUD
 The `DXVK_HUD` environment variable controls a HUD which can display the framerate and some stat counters. It accepts a comma-separated list of the following options:
 - `devinfo`: Displays the name of the GPU and the driver version.
+- `systeminfo`: Displays the CPU, Proton build, and window system.
+- `cpu`: Displays the CPU model.
+- `proton`: Displays the Proton build.
+- `wine`: Displays the Wine version and build.
+- `winsys`: Displays the window system.
 - `fps`: Shows the current frame rate.
 - `frametimes`: Shows a frame time graph.
 - `submissions`: Shows the number of command buffers submitted per frame.
