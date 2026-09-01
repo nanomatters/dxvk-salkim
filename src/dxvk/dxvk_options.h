@@ -42,6 +42,9 @@ namespace dxvk {
     /// HUD elements
     std::string hud;
 
+    /// Window for low frame rate metrics, in seconds
+    int32_t hudFpsLowsWindow = 7;
+
     /// Forces swap chain into MAILBOX (if true)
     /// or FIFO_RELAXED (if false) present mode
     Tristate tearFree = Tristate::Auto;

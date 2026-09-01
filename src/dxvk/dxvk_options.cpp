@@ -1,5 +1,7 @@
 #include "dxvk_options.h"
 
+#include <algorithm>
+
 namespace dxvk {
 
   DxvkOptions::DxvkOptions(const Config& config) {
@@ -19,6 +21,8 @@ namespace dxvk {
     trackPipelineLifetime = config.getOption<Tristate>("dxvk.trackPipelineLifetime",  Tristate::Auto);
     useRawSsbo            = config.getOption<Tristate>("dxvk.useRawSsbo",             Tristate::Auto);
     hud                   = config.getOption<std::string>("dxvk.hud", "");
+    hudFpsLowsWindow      = std::clamp(
+      config.getOption<int32_t>("dxvk.hudFpsLowsWindow", 7), 1, 30);
     tearFree              = config.getOption<Tristate>("dxvk.tearFree",               Tristate::Auto);
     hideIntegratedGraphics = config.getOption<bool>   ("dxvk.hideIntegratedGraphics", false);
     zeroMappedMemory      = config.getOption<bool>    ("dxvk.zeroMappedMemory",       false);
