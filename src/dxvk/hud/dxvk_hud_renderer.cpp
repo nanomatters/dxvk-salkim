@@ -31,14 +31,14 @@ namespace dxvk::hud {
 
 
 
-  HudRenderer::HudRenderer(const Rc<DxvkDevice>& device)
+  HudVulkanRenderer::HudVulkanRenderer(const Rc<DxvkDevice>& device)
   : m_device              (device),
     m_textPipelineLayout  (createPipelineLayout()) {
 
   }
   
   
-  HudRenderer::~HudRenderer() {
+  HudVulkanRenderer::~HudVulkanRenderer() {
     auto vk = m_device->vkd();
 
     for (const auto& p : m_textPipelines)
@@ -46,7 +46,7 @@ namespace dxvk::hud {
   }
   
   
-  void HudRenderer::beginFrame(
+  void HudVulkanRenderer::beginFrame(
     const Rc<DxvkCommandList>&ctx,
     const Rc<DxvkImageView>&  dstView,
     const HudOptions&         options) {
@@ -84,14 +84,14 @@ namespace dxvk::hud {
   }
   
   
-  void HudRenderer::endFrame(
+  void HudVulkanRenderer::endFrame(
     const Rc<DxvkCommandList>&ctx) {
     if (unlikely(m_device->debugFlags().test(DxvkDebugFlag::Capture)))
       ctx->cmdEndDebugUtilsLabel(DxvkCmdBuffer::ExecBuffer);
   }
 
 
-  void HudRenderer::drawText(
+  void HudVulkanRenderer::drawText(
           uint32_t            size,
           HudPos              pos,
           uint32_t            color,
@@ -112,7 +112,7 @@ namespace dxvk::hud {
   }
 
 
-  void HudRenderer::flushDraws(
+  void HudVulkanRenderer::flushDraws(
     const Rc<DxvkCommandList>&ctx,
     const Rc<DxvkImageView>&  dstView,
     const HudOptions&         options) {
@@ -206,7 +206,7 @@ namespace dxvk::hud {
   }
 
 
-  void HudRenderer::drawTextIndirect(
+  void HudVulkanRenderer::drawTextIndirect(
     const Rc<DxvkCommandList>&ctx,
     const HudPipelineKey&     key,
     const DxvkResourceBufferInfo& drawArgs,
@@ -243,7 +243,7 @@ namespace dxvk::hud {
   }
 
 
-  HudPipelineKey HudRenderer::getPipelineKey(
+  HudPipelineKey HudVulkanRenderer::getPipelineKey(
     const Rc<DxvkImageView>&  dstView) const {
     HudPipelineKey key;
     key.format = dstView->info().format;
@@ -252,7 +252,7 @@ namespace dxvk::hud {
   }
 
 
-  HudSpecConstants HudRenderer::getSpecConstants(
+  HudSpecConstants HudVulkanRenderer::getSpecConstants(
     const HudPipelineKey&     key) const {
     HudSpecConstants result = { };
     result.dstSpace = key.colorSpace;
@@ -261,12 +261,12 @@ namespace dxvk::hud {
   }
 
 
-  HudPushConstants HudRenderer::getPushConstants() const {
+  HudPushConstants HudVulkanRenderer::getPushConstants() const {
     return m_pushConstants;
   }
 
 
-  VkSpecializationInfo HudRenderer::getSpecInfo(
+  VkSpecializationInfo HudVulkanRenderer::getSpecInfo(
     const HudSpecConstants*   constants) const {
     VkSpecializationInfo specInfo = { };
     specInfo.mapEntryCount = HudSpecConstantMap.size();
@@ -277,7 +277,7 @@ namespace dxvk::hud {
   }
 
 
-  void HudRenderer::createFontResources() {
+  void HudVulkanRenderer::createFontResources() {
     DxvkBufferCreateInfo fontBufferInfo;
     fontBufferInfo.size = sizeof(HudFontGpuData);
     fontBufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT
@@ -339,7 +339,7 @@ namespace dxvk::hud {
   }
 
 
-  void HudRenderer::uploadFontResources(
+  void HudVulkanRenderer::uploadFontResources(
     const Rc<DxvkCommandList>&ctx) {
     size_t bufferDataSize = sizeof(HudFontGpuData);
     size_t textureDataSize = g_hudFont.width * g_hudFont.height;
@@ -453,7 +453,7 @@ namespace dxvk::hud {
   }
 
 
-  const DxvkPipelineLayout* HudRenderer::createPipelineLayout() {
+  const DxvkPipelineLayout* HudVulkanRenderer::createPipelineLayout() {
     static const std::array<DxvkDescriptorSetLayoutBinding, 4> bindings = {{
       { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,          1, VK_SHADER_STAGE_VERTEX_BIT   },
       { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,          1, VK_SHADER_STAGE_VERTEX_BIT   },
@@ -467,7 +467,7 @@ namespace dxvk::hud {
   }
 
 
-  VkPipeline HudRenderer::createPipeline(
+  VkPipeline HudVulkanRenderer::createPipeline(
     const HudPipelineKey&     key) {
     auto vk = m_device->vkd();
 
@@ -496,7 +496,7 @@ namespace dxvk::hud {
   }
 
 
-  VkPipeline HudRenderer::getPipeline(
+  VkPipeline HudVulkanRenderer::getPipeline(
     const HudPipelineKey&     key) {
     auto entry = m_textPipelines.find(key);
 

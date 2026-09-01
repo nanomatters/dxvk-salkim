@@ -75,10 +75,8 @@ namespace dxvk::hud {
     
     Rc<DxvkDevice>        m_device;
     
-    HudRenderer           m_renderer;
+    HudVulkanRenderer     m_renderer;
     HudItemSet            m_hudItems;
-
-    HudOptions            m_options;
     
   };
   
