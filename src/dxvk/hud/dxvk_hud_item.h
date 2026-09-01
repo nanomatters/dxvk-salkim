@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -10,6 +11,8 @@
 #include "../dxvk_gpu_query.h"
 
 #include "dxvk_hud_renderer.h"
+
+struct ID3DLowLatencyDevice;
 
 namespace dxvk::hud {
 
@@ -105,6 +108,9 @@ namespace dxvk::hud {
 
     void addSystemInfoItems();
 
+    void addReflexItems(
+            ID3DLowLatencyDevice* lowLatencyDevice);
+
     bool isEnabled(const char* name) const {
       return m_enableFull || m_enabled.find(name) != m_enabled.end();
     }
@@ -170,6 +176,83 @@ namespace dxvk::hud {
     static void parseOption(const std::string& str, float& value);
 
     void orderItems();
+
+  };
+
+
+  enum class HudReflexMetric : uint32_t {
+    FrameId,
+    SimulationInterval,
+    Input,
+    Simulation,
+    Submit,
+    Present,
+    Driver,
+    Queue,
+    Gpu,
+    GpuActive,
+    GpuFrame,
+    Camera,
+    Copy,
+    Ai,
+    Count,
+  };
+
+
+  /**
+   * \brief Shared Reflex report data
+   */
+  class HudReflexData : public RcObject {
+    constexpr static int64_t UpdateInterval = 500'000;
+  public:
+
+    HudReflexData(
+            ID3DLowLatencyDevice* lowLatencyDevice);
+
+    ~HudReflexData();
+
+    void update(
+            dxvk::high_resolution_clock::time_point time);
+
+    const std::string& value(
+            HudReflexMetric        metric) const;
+
+  private:
+
+    ID3DLowLatencyDevice* m_lowLatencyDevice;
+
+    std::array<std::string, size_t(HudReflexMetric::Count)> m_values;
+
+    dxvk::high_resolution_clock::time_point m_lastUpdate;
+
+  };
+
+
+  /**
+   * \brief Reflex latency report item
+   */
+  class HudReflexItem : public HudItem {
+
+  public:
+
+    HudReflexItem(
+      const Rc<HudReflexData>& data,
+            HudReflexMetric    metric);
+
+    void update(
+            dxvk::high_resolution_clock::time_point time);
+
+    HudPos render(
+      const Rc<DxvkCommandList>&ctx,
+      const HudPipelineKey&     key,
+      const HudOptions&         options,
+            HudRenderer&        renderer,
+            HudPos              position);
+
+  private:
+
+    Rc<HudReflexData> m_data;
+    HudReflexMetric   m_metric;
 
   };
 

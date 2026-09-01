@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 #include "../dxvk/dxvk_include.h"
 
 #include "../wsi/wsi_edid.h"
@@ -79,6 +81,74 @@ struct DXGI_VK_HUD_DATA {
   UINT                      FontHeight;
   UINT                      FontDataSize;
   const BYTE*               pFontData;
+};
+
+
+/**
+ * \brief Frame reports used for Reflex interop
+ */
+struct D3D_LOW_LATENCY_FRAME_REPORT {
+  UINT64 frameID;
+  UINT64 inputSampleTime;
+  UINT64 simStartTime;
+  UINT64 simEndTime;
+  UINT64 renderSubmitStartTime;
+  UINT64 renderSubmitEndTime;
+  UINT64 presentStartTime;
+  UINT64 presentEndTime;
+  UINT64 driverStartTime;
+  UINT64 driverEndTime;
+  UINT64 osRenderQueueStartTime;
+  UINT64 osRenderQueueEndTime;
+  UINT64 gpuRenderStartTime;
+  UINT64 gpuRenderEndTime;
+  UINT32 gpuActiveRenderTimeUs;
+  UINT32 gpuFrameTimeUs;
+  UINT64 cameraConstructedTime;
+  UINT32 crossAdapterCopyTimeUs;
+  UINT32 aiFrameTimeUs;
+  UINT8 rsvd[104];
+};
+
+static_assert(sizeof(D3D_LOW_LATENCY_FRAME_REPORT) == 240);
+static_assert(offsetof(D3D_LOW_LATENCY_FRAME_REPORT, cameraConstructedTime) == 120);
+static_assert(offsetof(D3D_LOW_LATENCY_FRAME_REPORT, crossAdapterCopyTimeUs) == 128);
+static_assert(offsetof(D3D_LOW_LATENCY_FRAME_REPORT, aiFrameTimeUs) == 132);
+
+
+/**
+ * \brief Data structure used for Reflex interop
+ */
+struct D3D_LOW_LATENCY_RESULTS {
+  UINT32 version;
+  D3D_LOW_LATENCY_FRAME_REPORT frameReports[64];
+  UINT8 rsvd[32];
+};
+
+static_assert(sizeof(D3D_LOW_LATENCY_RESULTS) == 15400);
+static_assert(offsetof(D3D_LOW_LATENCY_RESULTS, frameReports) == 8);
+
+
+/**
+ * \brief D3D interop interface for Nvidia Reflex
+ */
+MIDL_INTERFACE("f3112584-41f9-348d-a59b-00b7e1d285d6")
+ID3DLowLatencyDevice : public IUnknown {
+  virtual BOOL STDMETHODCALLTYPE SupportsLowLatency() = 0;
+
+  virtual HRESULT STDMETHODCALLTYPE LatencySleep() = 0;
+
+  virtual HRESULT STDMETHODCALLTYPE SetLatencySleepMode(
+          BOOL                          LowLatencyEnable,
+          BOOL                          LowLatencyBoost,
+          UINT32                        MinIntervalUs) = 0;
+
+  virtual HRESULT STDMETHODCALLTYPE SetLatencyMarker(
+          UINT64                        FrameId,
+          UINT32                        MarkerType) = 0;
+
+  virtual HRESULT STDMETHODCALLTYPE GetLatencyInfo(
+          D3D_LOW_LATENCY_RESULTS*      pLowLatencyResults) = 0;
 };
 
 
@@ -504,4 +574,5 @@ __CRT_UUID_DECL(IDXGIVkSwapChain2,         0xaed91093,0xe02e,0x458c,0xbd,0xef,0x
 __CRT_UUID_DECL(IDXGIVkSwapChain3,         0xfa25651a,0xae62,0x4ddd,0x90,0x86,0x29,0xea,0x31,0x44,0x82,0x0a);
 __CRT_UUID_DECL(IDXGIVkSwapChainHud,       0xdeb1f1b9,0x48c7,0x4310,0xb5,0xa9,0x3b,0x92,0xf5,0x93,0x02,0x3f);
 __CRT_UUID_DECL(IDXGIVkSwapChainFactory,   0xe7d6c3ca,0x23a0,0x4e08,0x9f,0x2f,0xea,0x52,0x31,0xdf,0x66,0x33);
+__CRT_UUID_DECL(ID3DLowLatencyDevice,      0xf3112584,0x41f9,0x348d,0xa5,0x9b,0x00,0xb7,0xe1,0xd2,0x85,0xd6);
 #endif

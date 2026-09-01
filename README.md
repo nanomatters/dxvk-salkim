@@ -56,6 +56,21 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `winsys`: Displays the window system.
 - `fps`: Shows the current frame rate.
 - `fps_lows`: Shows 1% and 0.1% low frame rates over the preceding seven seconds.
+- `reflex`: Shows all available values from the newest completed Reflex latency report.
+- `reflex.id`: Shows the Reflex frame ID.
+- `reflex.interval`: Shows the interval between consecutive simulation start markers.
+- `reflex.input`: Shows the input sample marker.
+- `reflex.sim`: Shows the simulation end marker.
+- `reflex.submit`: Shows the render submission start and end markers.
+- `reflex.present`: Shows the present start and end markers.
+- `reflex.driver`: Shows the driver start and end markers.
+- `reflex.queue`: Shows the OS render queue start and end markers.
+- `reflex.gpu`: Shows the GPU render start and end markers.
+- `reflex.active`: Shows GPU active rendering time, excluding idle periods.
+- `reflex.frame`: Shows the interval between consecutive GPU render completions.
+- `reflex.camera`: Shows the camera construction marker.
+- `reflex.copy`: Shows cross adapter copy time.
+- `reflex.ai`: Shows frame generation time.
 - `frametimes`: Shows a frame time graph.
 - `submissions`: Shows the number of command buffers submitted per frame.
 - `drawcalls`: Shows the number of draw calls and render passes per frame.
@@ -80,6 +95,7 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 For example, `DXVK_HUD=devinfo,fps,newline,fps_lows,horizontal` places
 device information and FPS on the first row and low frame rates on the second.
 HUD elements are displayed in the order in which they are listed.
+Reflex marker timestamps are displayed relative to the simulation start marker.
 
 Additionally, `DXVK_HUD=1` has the same effect as `DXVK_HUD=devinfo,fps`, and `DXVK_HUD=full` enables all available HUD elements.
 
