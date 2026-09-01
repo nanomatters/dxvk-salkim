@@ -41,9 +41,11 @@ namespace dxvk::hud {
 
     auto key = m_renderer.getPipelineKey(dstView);
     const auto& options = m_hudItems.options();
+    VkExtent3D surfaceSize = dstView->mipLevelExtent(0u);
 
     m_renderer.beginFrame(ctx, dstView, options);
-    m_hudItems.render(ctx, key, options, m_renderer);
+    m_hudItems.render(ctx, key, options, m_renderer,
+      surfaceSize.width, surfaceSize.height);
     m_renderer.flushDraws(ctx, dstView, options);
     m_renderer.endFrame(ctx);
   }
