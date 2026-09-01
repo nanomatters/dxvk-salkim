@@ -64,7 +64,7 @@ namespace dxvk::hud {
 
   public:
 
-    HudItemSet(std::string config);
+    HudItemSet(std::string config, int32_t fpsLowsWindow);
 
     HudItemSet(const Rc<DxvkDevice>& device);
 
@@ -97,6 +97,10 @@ namespace dxvk::hud {
 
     const HudOptions& options() const {
       return m_renderOptions;
+    }
+
+    int64_t fpsLowsWindowNs() const {
+      return m_fpsLowsWindowNs;
     }
 
     void addSystemInfoItems();
@@ -154,6 +158,7 @@ namespace dxvk::hud {
     std::unordered_map<std::string, std::string>  m_options;
     std::vector<Rc<HudItem>>                      m_items;
     HudOptions                                    m_renderOptions;
+    int64_t                                       m_fpsLowsWindowNs = 7'000'000'000;
 
     static void parseOption(const std::string& str, float& value);
 
@@ -268,6 +273,53 @@ namespace dxvk::hud {
     std::string m_deviceName;
     std::string m_driverName;
     std::string m_driverVer;
+
+  };
+
+
+  /**
+   * \brief HUD item to display low frame rates
+   */
+  class HudFpsLowItem : public HudItem {
+    constexpr static int64_t UpdateIntervalNs = 500'000'000;
+    constexpr static size_t MaxSamples = 16'384;
+  public:
+
+    HudFpsLowItem(int64_t windowDurationNs);
+
+    void update(dxvk::high_resolution_clock::time_point time);
+
+    HudPos render(
+      const Rc<DxvkCommandList>&ctx,
+      const HudPipelineKey&     key,
+      const HudOptions&         options,
+            HudRenderer&        renderer,
+            HudPos              position);
+
+  private:
+
+    struct Sample {
+      int64_t endTime;
+      int64_t duration;
+    };
+
+    int64_t              m_windowDurationNs;
+    std::vector<Sample>  m_samples;
+    std::vector<int64_t> m_scratch;
+    size_t               m_sampleHead = 0;
+    size_t               m_sampleCount = 0;
+    int64_t              m_lastSampleTime = 0;
+    int64_t              m_lastUpdateTime = 0;
+    bool                 m_haveLastSample = false;
+    std::string          m_onePercent = "--";
+    std::string          m_pointOnePercent = "--";
+
+    void addSample(int64_t endTime, int64_t duration);
+    void updateRates();
+
+    static std::string formatRate(
+      const std::vector<int64_t>& samples,
+            size_t                count);
 
   };
 
