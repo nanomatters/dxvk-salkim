@@ -1,4 +1,5 @@
 #include "dxvk_hud_item.h"
+#include "dxvk_hud_info.h"
 
 #include <hud_chunk_frag_background.h>
 #include <hud_chunk_frag_visualize.h>
@@ -143,9 +144,8 @@ namespace dxvk::hud {
 
       std::vector<Draw> m_draws;
 
-      static int64_t getTextWidth(const Draw& draw) {
-        return (int64_t(draw.size) * g_hudFont.advance * int64_t(draw.text.size())
-          + g_hudFont.size - 1) / g_hudFont.size;
+      int64_t getTextWidth(const Draw& draw) const {
+        return textWidth(draw.size, draw.text);
       }
 
       size_t getLineBounds(
@@ -240,6 +240,21 @@ namespace dxvk::hud {
   }
 
 
+  void HudItemSet::addSystemInfoItems() {
+    if (m_enableFull) {
+      add<HudSystemInfoItem>("systeminfo", -1, HudSystemInfoItem::All);
+    } else if (isEnabled("systeminfo")) {
+      add<HudSystemInfoItem>("systeminfo", -1, HudSystemInfoItem::System);
+      add<HudSystemInfoItem>("wine", -1, HudSystemInfoItem::Wine);
+    } else {
+      add<HudSystemInfoItem>("cpu", -1, HudSystemInfoItem::Cpu);
+      add<HudSystemInfoItem>("proton", -1, HudSystemInfoItem::Proton);
+      add<HudSystemInfoItem>("wine", -1, HudSystemInfoItem::Wine);
+      add<HudSystemInfoItem>("winsys", -1, HudSystemInfoItem::Display);
+    }
+  }
+
+
   void HudItemSet::update() {
     auto time = dxvk::high_resolution_clock::now();
 
@@ -298,6 +313,48 @@ namespace dxvk::hud {
     } catch (const std::invalid_argument&) {
       return;
     }
+  }
+
+
+  HudSystemInfoItem::HudSystemInfoItem(uint32_t fields) {
+    const auto& info = HudSystemInfo::get();
+
+    if ((fields & Cpu) && !info.cpuName.empty())
+      m_lines.push_back({ "CPU: ", info.cpuName });
+
+    if ((fields & Proton) && !info.protonBuild.empty())
+      m_lines.push_back({ "Proton: ", info.protonBuild });
+
+    if ((fields & Wine) && !info.wineVersion.empty()) {
+      std::string wine = info.wineVersion;
+
+      if (!info.wineBuild.empty())
+        wine = str::format(wine, " (", info.wineBuild, ")");
+
+      m_lines.push_back({ "Wine: ", std::move(wine) });
+    }
+
+    if ((fields & Display) && !info.displayBackend.empty())
+      m_lines.push_back({ "Window system: ", info.displayBackend });
+  }
+
+
+  HudPos HudSystemInfoItem::render(
+    const Rc<DxvkCommandList>&ctx,
+    const HudPipelineKey&     key,
+    const HudOptions&         options,
+          HudRenderer&        renderer,
+          HudPos              position) {
+    for (const auto& line : m_lines) {
+      position.y += 20;
+      renderer.drawText(16, position, 0xff40ffffu, line.label);
+      renderer.drawText(16,
+        { position.x + int32_t(renderer.textWidth(16, line.label)), position.y },
+        0xffffffffu, line.value);
+    }
+
+    position.y += 8;
+    return position;
   }
 
 
