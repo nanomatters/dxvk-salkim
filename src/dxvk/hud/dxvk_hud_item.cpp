@@ -11,10 +11,167 @@
 #include <hud_graph_vert.h>
 
 #include <algorithm>
+#include <cmath>
 #include <iomanip>
+#include <limits>
 #include <version.h>
 
 namespace dxvk::hud {
+
+  namespace {
+
+    class HudTextLayoutRenderer final : public HudRenderer {
+
+    public:
+
+      void drawText(
+              uint32_t            size,
+              HudPos              position,
+              uint32_t            color,
+        const std::string&        text) override {
+        if (!text.empty())
+          m_draws.push_back({ size, position, color, text });
+      }
+
+      void replay(
+              HudRenderer&        renderer,
+              uint32_t            surfaceWidth,
+              uint32_t            surfaceHeight,
+              float               scale,
+              bool                horizontal,
+              bool                center,
+              bool                bottom) const {
+        constexpr int64_t gap = 24;
+
+        if (m_draws.empty())
+          return;
+
+        bool haveWidth = surfaceWidth && std::isfinite(scale) && scale > 0.0f;
+        int64_t logicalWidth = haveWidth
+          ? int64_t(double(surfaceWidth) / scale)
+          : 0;
+        bool haveHeight = surfaceHeight && std::isfinite(scale) && scale > 0.0f;
+        int64_t logicalHeight = haveHeight
+          ? int64_t(double(surfaceHeight) / scale)
+          : 0;
+
+        if (!horizontal) {
+          int64_t left = m_draws.front().position.x;
+          int64_t right = left;
+          int64_t lastBaseline = m_draws.front().position.y;
+
+          for (const auto& draw : m_draws) {
+            left = std::min<int64_t>(left, draw.position.x);
+            right = std::max<int64_t>(right,
+              int64_t(draw.position.x) + getTextWidth(draw));
+            lastBaseline = std::max<int64_t>(lastBaseline, draw.position.y);
+          }
+
+          int64_t x = center && haveWidth
+            ? std::max<int64_t>(8, (logicalWidth - (right - left)) / 2)
+            : 8;
+          int64_t yOffset = bottom && haveHeight
+            ? logicalHeight - 20 - lastBaseline
+            : 0;
+
+          for (const auto& draw : m_draws) {
+            int64_t drawX = x + int64_t(draw.position.x) - left;
+            int64_t drawY = int64_t(draw.position.y) + yOffset;
+            HudPos position = {
+              int32_t(std::clamp(drawX,
+                int64_t(std::numeric_limits<int32_t>::min()),
+                int64_t(std::numeric_limits<int32_t>::max()))),
+              int32_t(std::clamp(drawY,
+                int64_t(std::numeric_limits<int32_t>::min()),
+                int64_t(std::numeric_limits<int32_t>::max()))),
+            };
+
+            renderer.drawText(draw.size, position, draw.color, draw.text);
+          }
+
+          return;
+        }
+
+        int64_t totalWidth = -gap;
+
+        for (size_t i = 0; i < m_draws.size();) {
+          int64_t left, right;
+          size_t end = getLineBounds(i, &left, &right);
+
+          totalWidth += right - left + gap;
+          i = end;
+        }
+
+        int64_t x = 8;
+
+        if (center && haveWidth)
+          x = std::max<int64_t>(8, (logicalWidth - totalWidth) / 2);
+        int64_t y = bottom && haveHeight ? logicalHeight - 20 : 24;
+
+        for (size_t i = 0; i < m_draws.size();) {
+          int64_t left, right;
+          size_t end = getLineBounds(i, &left, &right);
+
+          for (size_t j = i; j < end; j++) {
+            int64_t drawX = x + int64_t(m_draws[j].position.x) - left;
+            HudPos position = {
+              int32_t(std::clamp(drawX,
+                int64_t(std::numeric_limits<int32_t>::min()),
+                int64_t(std::numeric_limits<int32_t>::max()))),
+              int32_t(std::clamp(y,
+                int64_t(std::numeric_limits<int32_t>::min()),
+                int64_t(std::numeric_limits<int32_t>::max()))),
+            };
+
+            renderer.drawText(m_draws[j].size, position,
+              m_draws[j].color, m_draws[j].text);
+          }
+
+          x += right - left + gap;
+          i = end;
+        }
+      }
+
+    private:
+
+      struct Draw {
+        uint32_t size;
+        HudPos position;
+        uint32_t color;
+        std::string text;
+      };
+
+      std::vector<Draw> m_draws;
+
+      static int64_t getTextWidth(const Draw& draw) {
+        return (int64_t(draw.size) * g_hudFont.advance * int64_t(draw.text.size())
+          + g_hudFont.size - 1) / g_hudFont.size;
+      }
+
+      size_t getLineBounds(
+              size_t              first,
+              int64_t*            pLeft,
+              int64_t*            pRight) const {
+        int32_t y = m_draws[first].position.y;
+        int64_t left = m_draws[first].position.x;
+        int64_t right = left;
+        size_t end = first;
+
+        while (end < m_draws.size() && m_draws[end].position.y == y) {
+          left = std::min<int64_t>(left, m_draws[end].position.x);
+          right = std::max<int64_t>(right,
+            int64_t(m_draws[end].position.x) + getTextWidth(m_draws[end]));
+          end += 1;
+        }
+
+        *pLeft = left;
+        *pRight = right;
+        return end;
+      }
+
+    };
+
+  }
 
   HudItem::~HudItem() {
 
@@ -72,6 +229,9 @@ namespace dxvk::hud {
       getOption<float>("scale", 1.0f), 0.25f, 4.0f);
     m_renderOptions.opacity = std::clamp(
       getOption<float>("opacity", 1.0f), 0.1f, 1.0f);
+    m_renderOptions.horizontal = m_enabled.find("horizontal") != m_enabled.end();
+    m_renderOptions.center = m_enabled.find("center") != m_enabled.end();
+    m_renderOptions.bottom = m_enabled.find("bottom") != m_enabled.end();
   }
 
 
@@ -92,18 +252,43 @@ namespace dxvk::hud {
       const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
-            HudRenderer&        renderer) {
-    HudPos position = { 8, 8 };
+            HudRenderer&        renderer,
+            uint32_t            surfaceWidth,
+            uint32_t            surfaceHeight) {
+    if (!options.horizontal && !options.center && !options.bottom) {
+      HudPos position = { 8, 8 };
 
-    for (const auto& item : m_items)
-      position = item->render(ctx, key, options, renderer, position);
+      for (const auto& item : m_items)
+        position = item->render(ctx, key, options, renderer, position);
+
+      return;
+    }
+
+    HudTextLayoutRenderer layout;
+    HudPos position = options.horizontal ? HudPos{ 0, 0 } : HudPos{ 8, 8 };
+
+    for (const auto& item : m_items) {
+      if (item->supportsHorizontalLayout())
+        position = item->render(ctx, key, options, layout, position);
+    }
+
+    layout.replay(renderer, surfaceWidth, surfaceHeight, options.scale,
+      options.horizontal, options.center, options.bottom);
+    position = { 8, 8 };
+
+    for (const auto& item : m_items) {
+      if (!item->supportsHorizontalLayout())
+        position = item->render(ctx, key, options, renderer, position);
+    }
   }
 
 
   void HudItemSet::render(
-          HudRenderer&        renderer) {
+          HudRenderer&        renderer,
+          uint32_t            surfaceWidth,
+          uint32_t            surfaceHeight) {
     render(Rc<DxvkCommandList>(), HudPipelineKey(),
-      m_renderOptions, renderer);
+      m_renderOptions, renderer, surfaceWidth, surfaceHeight);
   }
 
 

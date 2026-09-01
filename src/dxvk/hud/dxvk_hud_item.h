@@ -32,6 +32,10 @@ namespace dxvk::hud {
     virtual void update(
             dxvk::high_resolution_clock::time_point time);
 
+    virtual bool supportsHorizontalLayout() const {
+      return true;
+    }
+
     /**
      * \brief Renders the HUD
      *
@@ -82,10 +86,14 @@ namespace dxvk::hud {
       const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
-            HudRenderer&        renderer);
+            HudRenderer&        renderer,
+            uint32_t            surfaceWidth,
+            uint32_t            surfaceHeight);
 
     void render(
-            HudRenderer&        renderer);
+            HudRenderer&        renderer,
+            uint32_t            surfaceWidth,
+            uint32_t            surfaceHeight);
 
     const HudOptions& options() const {
       return m_renderOptions;
@@ -272,6 +280,10 @@ namespace dxvk::hud {
             HudVulkanRenderer*  renderer);
 
     ~HudFrameTimeItem();
+
+    bool supportsHorizontalLayout() const override {
+      return false;
+    }
 
     HudPos render(
       const Rc<DxvkCommandList>&ctx,
@@ -560,6 +572,10 @@ namespace dxvk::hud {
 
     ~HudMemoryDetailsItem();
 
+    bool supportsHorizontalLayout() const override {
+      return false;
+    }
+
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
@@ -724,6 +740,10 @@ namespace dxvk::hud {
     HudCompilerActivityItem(const Rc<DxvkDevice>& device);
 
     ~HudCompilerActivityItem();
+
+    bool supportsHorizontalLayout() const override {
+      return false;
+    }
 
     void update(dxvk::high_resolution_clock::time_point time);
 
