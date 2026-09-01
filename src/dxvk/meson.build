@@ -86,6 +86,7 @@ dxvk_src = [
 
   'hud/dxvk_hud.cpp',
   'hud/dxvk_hud_font.cpp',
+  'hud/dxvk_hud_info.cpp',
   'hud/dxvk_hud_item.cpp',
   'hud/dxvk_hud_renderer.cpp',
 ]
@@ -98,6 +99,9 @@ if platform == 'windows'
 endif
 
 dxvk_extra_deps = [ dependency('threads') ]
+if platform == 'windows'
+  dxvk_extra_deps += [ cpp.find_library('advapi32') ]
+endif
 if platform == 'linux'
   dxvk_extra_deps += [ cpp.find_library('dl', required: false) ]
 endif
