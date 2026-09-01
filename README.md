@@ -55,6 +55,7 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `wine`: Displays the Wine version and build.
 - `winsys`: Displays the window system.
 - `fps`: Shows the current frame rate.
+- `fps_lows`: Shows 1% and 0.1% low frame rates over the preceding seven seconds.
 - `frametimes`: Shows a frame time graph.
 - `submissions`: Shows the number of command buffers submitted per frame.
 - `drawcalls`: Shows the number of draw calls and render passes per frame.
