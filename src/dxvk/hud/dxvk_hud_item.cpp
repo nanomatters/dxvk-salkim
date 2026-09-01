@@ -32,7 +32,11 @@ namespace dxvk::hud {
               uint32_t            color,
         const std::string&        text) override {
         if (!text.empty())
-          m_draws.push_back({ size, position, color, text });
+          m_draws.push_back({ size, position, color, text, m_line });
+      }
+
+      void setLine(size_t line) {
+        m_line = line;
       }
 
       void replay(
@@ -94,43 +98,52 @@ namespace dxvk::hud {
           return;
         }
 
-        int64_t totalWidth = -gap;
+        constexpr int64_t lineHeight = 20;
+        size_t lastLine = m_draws.back().line;
 
-        for (size_t i = 0; i < m_draws.size();) {
-          int64_t left, right;
-          size_t end = getLineBounds(i, &left, &right);
+        for (size_t first = 0; first < m_draws.size();) {
+          size_t line = m_draws[first].line;
+          size_t lineEnd = first;
+          int64_t totalWidth = -gap;
 
-          totalWidth += right - left + gap;
-          i = end;
-        }
-
-        int64_t x = 8;
-
-        if (center && haveWidth)
-          x = std::max<int64_t>(8, (logicalWidth - totalWidth) / 2);
-        int64_t y = bottom && haveHeight ? logicalHeight - 20 : 24;
-
-        for (size_t i = 0; i < m_draws.size();) {
-          int64_t left, right;
-          size_t end = getLineBounds(i, &left, &right);
-
-          for (size_t j = i; j < end; j++) {
-            int64_t drawX = x + int64_t(m_draws[j].position.x) - left;
-            HudPos position = {
-              int32_t(std::clamp(drawX,
-                int64_t(std::numeric_limits<int32_t>::min()),
-                int64_t(std::numeric_limits<int32_t>::max()))),
-              int32_t(std::clamp(y,
-                int64_t(std::numeric_limits<int32_t>::min()),
-                int64_t(std::numeric_limits<int32_t>::max()))),
-            };
-
-            renderer.drawText(m_draws[j].size, position,
-              m_draws[j].color, m_draws[j].text);
+          while (lineEnd < m_draws.size() && m_draws[lineEnd].line == line) {
+            int64_t left, right;
+            lineEnd = getLineBounds(lineEnd, &left, &right);
+            totalWidth += right - left + gap;
           }
 
-          x += right - left + gap;
-          i = end;
+          int64_t x = center && haveWidth
+            ? std::max<int64_t>(8, (logicalWidth - totalWidth) / 2)
+            : 8;
+          int64_t lineOffset = int64_t(bottom ? lastLine - line : line);
+          int64_t y = bottom && haveHeight
+            ? logicalHeight - 20 - lineOffset * lineHeight
+            : 24 + lineOffset * lineHeight;
+
+          for (size_t i = first; i < lineEnd;) {
+            int64_t left, right;
+            size_t end = getLineBounds(i, &left, &right);
+
+            for (size_t j = i; j < end; j++) {
+              int64_t drawX = x + int64_t(m_draws[j].position.x) - left;
+              HudPos position = {
+                int32_t(std::clamp(drawX,
+                  int64_t(std::numeric_limits<int32_t>::min()),
+                  int64_t(std::numeric_limits<int32_t>::max()))),
+                int32_t(std::clamp(y,
+                  int64_t(std::numeric_limits<int32_t>::min()),
+                  int64_t(std::numeric_limits<int32_t>::max()))),
+              };
+
+              renderer.drawText(m_draws[j].size, position,
+                m_draws[j].color, m_draws[j].text);
+            }
+
+            x += right - left + gap;
+            i = end;
+          }
+
+          first = lineEnd;
         }
       }
 
@@ -141,9 +154,11 @@ namespace dxvk::hud {
         HudPos position;
         uint32_t color;
         std::string text;
+        size_t line;
       };
 
       std::vector<Draw> m_draws;
+      size_t m_line = 0;
 
       int64_t getTextWidth(const Draw& draw) const {
         return textWidth(draw.size, draw.text);
@@ -158,7 +173,9 @@ namespace dxvk::hud {
         int64_t right = left;
         size_t end = first;
 
-        while (end < m_draws.size() && m_draws[end].position.y == y) {
+        while (end < m_draws.size() &&
+               m_draws[end].line == m_draws[first].line &&
+               m_draws[end].position.y == y) {
           left = std::min<int64_t>(left, m_draws[end].position.x);
           right = std::max<int64_t>(right,
             int64_t(m_draws[end].position.x) + getTextWidth(m_draws[end]));
@@ -214,7 +231,12 @@ namespace dxvk::hud {
           configStr.substr(pos,     mid - pos),
           configStr.substr(mid + 1, end - mid - 1) });
       } else {
-        m_enabled.insert(configStr.substr(pos, end - pos));
+        std::string token = configStr.substr(pos, end - pos);
+        m_enabled.insert(token);
+        m_layoutTokens.push_back(token);
+
+        if (token == "newline")
+          m_hasNewline = true;
       }
 
       pos = end + 1;
@@ -258,7 +280,71 @@ namespace dxvk::hud {
   }
 
 
+  void HudItemSet::orderItems() {
+    if (m_itemsOrdered)
+      return;
+
+    std::vector<bool> added(m_items.size());
+    std::vector<size_t> order;
+    std::vector<size_t> lines;
+    size_t line = 0;
+
+    order.reserve(m_items.size());
+    lines.reserve(m_items.size());
+
+    auto appendItem = [&] (size_t index) {
+      if (!added[index]) {
+        order.push_back(index);
+        lines.push_back(line);
+        added[index] = true;
+      }
+    };
+
+    auto appendNamedItems = [&] (const std::string& name) {
+      for (size_t i = 0; i < m_items.size(); i++) {
+        if (m_itemNames[i] == name)
+          appendItem(i);
+      }
+    };
+
+    for (const auto& token : m_layoutTokens) {
+      if (token == "newline") {
+        line += 1;
+      } else if (token == "1") {
+        appendNamedItems("devinfo");
+        appendNamedItems("fps");
+      } else if (token == "full") {
+        for (size_t i = 0; i < m_items.size(); i++)
+          appendItem(i);
+      } else {
+        appendNamedItems(token);
+      }
+    }
+
+    for (size_t i = 0; i < m_items.size(); i++)
+      appendItem(i);
+
+    std::vector<std::string> orderedNames;
+    std::vector<Rc<HudItem>> orderedItems;
+
+    orderedNames.reserve(m_items.size());
+    orderedItems.reserve(m_items.size());
+
+    for (size_t index : order) {
+      orderedNames.push_back(std::move(m_itemNames[index]));
+      orderedItems.push_back(std::move(m_items[index]));
+    }
+
+    m_itemNames = std::move(orderedNames);
+    m_items = std::move(orderedItems);
+    m_itemLines = std::move(lines);
+    m_itemsOrdered = true;
+  }
+
+
   void HudItemSet::update() {
+    orderItems();
+
     auto time = dxvk::high_resolution_clock::now();
 
     for (const auto& item : m_items)
@@ -273,6 +359,8 @@ namespace dxvk::hud {
             HudRenderer&        renderer,
             uint32_t            surfaceWidth,
             uint32_t            surfaceHeight) {
+    orderItems();
+
     if (!options.horizontal && !options.center && !options.bottom) {
       HudPos position = { 8, 8 };
 
@@ -284,10 +372,21 @@ namespace dxvk::hud {
 
     HudTextLayoutRenderer layout;
     HudPos position = options.horizontal ? HudPos{ 0, 0 } : HudPos{ 8, 8 };
+    size_t line = std::numeric_limits<size_t>::max();
 
-    for (const auto& item : m_items) {
-      if (item->supportsHorizontalLayout())
-        position = item->render(ctx, key, options, layout, position);
+    for (size_t i = 0; i < m_items.size(); i++) {
+      if (m_items[i]->supportsHorizontalLayout()) {
+        if (options.horizontal && m_hasNewline) {
+          if (line != m_itemLines[i]) {
+            line = m_itemLines[i];
+            position = { 0, 0 };
+          }
+
+          layout.setLine(line);
+        }
+
+        position = m_items[i]->render(ctx, key, options, layout, position);
+      }
     }
 
     layout.replay(renderer, surfaceWidth, surfaceHeight, options.scale,
