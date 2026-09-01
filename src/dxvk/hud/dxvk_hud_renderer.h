@@ -86,6 +86,10 @@ namespace dxvk::hud {
 
     virtual ~HudRenderer() { }
 
+    uint32_t textWidth(
+            uint32_t            size,
+      const std::string&        text) const;
+
     virtual void drawText(
             uint32_t            size,
             HudPos              pos,
