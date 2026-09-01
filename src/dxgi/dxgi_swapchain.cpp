@@ -42,11 +42,15 @@ namespace dxvk {
     m_presenter->QueryInterface(__uuidof(IDXGIVkSwapChain3), reinterpret_cast<void**>(&m_presenter3));
 
     if (m_is_d3d12) {
+      Com<ID3DLowLatencyDevice> lowLatencyDevice;
+
       m_presenter->QueryInterface(__uuidof(IDXGIVkSwapChainHud), reinterpret_cast<void**>(&m_presenterHud));
+      m_presenter->GetDevice(__uuidof(ID3DLowLatencyDevice),
+        reinterpret_cast<void**>(&lowLatencyDevice));
 
       if (m_presenterHud) {
         const auto& options = m_factory->GetDXVKInstance()->options();
-        m_hud = DxgiHud::create(m_adapter.ptr(),
+        m_hud = DxgiHud::create(m_adapter.ptr(), lowLatencyDevice.ptr(),
           options.hud, options.hudFpsLowsWindow);
       }
     }

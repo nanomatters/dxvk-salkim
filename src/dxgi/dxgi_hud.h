@@ -18,6 +18,7 @@ namespace dxvk {
 
     static std::unique_ptr<DxgiHud> create(
             IDXGIAdapter*           adapter,
+            ID3DLowLatencyDevice*   lowLatencyDevice,
       const std::string&            fallbackConfig,
             int32_t                 fpsLowsWindow);
 
@@ -33,6 +34,7 @@ namespace dxvk {
     explicit DxgiHud(
             std::string             config,
             std::string             deviceName,
+            ID3DLowLatencyDevice*   lowLatencyDevice,
             int32_t                 fpsLowsWindow);
 
     hud::HudItemSet                  m_hudItems;
