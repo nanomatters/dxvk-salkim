@@ -44,8 +44,11 @@ namespace dxvk {
     if (m_is_d3d12) {
       m_presenter->QueryInterface(__uuidof(IDXGIVkSwapChainHud), reinterpret_cast<void**>(&m_presenterHud));
 
-      if (m_presenterHud)
-        m_hud = DxgiHud::create(m_adapter.ptr(), m_factory->GetDXVKInstance()->options().hud);
+      if (m_presenterHud) {
+        const auto& options = m_factory->GetDXVKInstance()->options();
+        m_hud = DxgiHud::create(m_adapter.ptr(),
+          options.hud, options.hudFpsLowsWindow);
+      }
     }
 
     m_frameRateOption = m_factory->GetOptions()->maxFrameRate;

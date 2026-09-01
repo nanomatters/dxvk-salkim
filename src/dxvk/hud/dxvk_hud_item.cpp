@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <version.h>
@@ -191,10 +192,12 @@ namespace dxvk::hud {
       configStr = device->config().hud;
 
     return configStr;
-  }()) { }
+  }(), device->config().hudFpsLowsWindow) { }
 
 
-  HudItemSet::HudItemSet(std::string configStr) {
+  HudItemSet::HudItemSet(std::string configStr, int32_t fpsLowsWindow) {
+    m_fpsLowsWindowNs = int64_t(std::clamp(fpsLowsWindow, 1, 30)) * 1'000'000'000;
+
     std::string::size_type pos = 0;
     std::string::size_type end = 0;
     std::string::size_type mid = 0;
@@ -481,6 +484,141 @@ namespace dxvk::hud {
     renderer.drawText(16, position, 0xff4040ffu, "FPS:");
     renderer.drawText(16, { position.x + 60, position.y },
       0xffffffffu, m_frameRate);
+
+    position.y += 8;
+    return position;
+  }
+
+
+  HudFpsLowItem::HudFpsLowItem(int64_t windowDurationNs)
+  : m_windowDurationNs(windowDurationNs),
+    m_samples(MaxSamples) {
+    m_scratch.reserve(MaxSamples);
+  }
+
+
+  void HudFpsLowItem::update(dxvk::high_resolution_clock::time_point time) {
+    int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      time.time_since_epoch()).count();
+
+    if (!m_haveLastSample) {
+      m_lastSampleTime = now;
+      m_lastUpdateTime = now;
+      m_haveLastSample = true;
+      return;
+    }
+
+    int64_t duration = now - m_lastSampleTime;
+    m_lastSampleTime = now;
+
+    if (duration <= 0)
+      return;
+
+    if (duration >= m_windowDurationNs) {
+      m_sampleHead = 0;
+      m_sampleCount = 0;
+      m_lastUpdateTime = now;
+      m_onePercent = "--";
+      m_pointOnePercent = "--";
+      return;
+    }
+
+    addSample(now, duration);
+
+    if (now - m_lastUpdateTime >= UpdateIntervalNs) {
+      updateRates();
+      m_lastUpdateTime = now;
+    }
+  }
+
+
+  void HudFpsLowItem::addSample(int64_t endTime, int64_t duration) {
+    int64_t cutoff = endTime - m_windowDurationNs;
+
+    while (m_sampleCount && m_samples[m_sampleHead].endTime <= cutoff) {
+      m_sampleHead = (m_sampleHead + 1) % MaxSamples;
+      m_sampleCount -= 1;
+    }
+
+    size_t index;
+
+    if (m_sampleCount < MaxSamples) {
+      index = (m_sampleHead + m_sampleCount) % MaxSamples;
+      m_sampleCount += 1;
+    } else {
+      index = m_sampleHead;
+      m_sampleHead = (m_sampleHead + 1) % MaxSamples;
+    }
+
+    m_samples[index] = { endTime, duration };
+  }
+
+
+  void HudFpsLowItem::updateRates() {
+    m_scratch.clear();
+
+    for (size_t i = 0; i < m_sampleCount; i++)
+      m_scratch.push_back(m_samples[(m_sampleHead + i) % MaxSamples].duration);
+
+    if (m_scratch.empty()) {
+      m_onePercent = "--";
+      m_pointOnePercent = "--";
+      return;
+    }
+
+    size_t onePercentCount = (m_scratch.size() + 99) / 100;
+    auto onePercentEnd = m_scratch.begin() + onePercentCount;
+
+    if (onePercentEnd != m_scratch.end())
+      std::nth_element(m_scratch.begin(), onePercentEnd,
+        m_scratch.end(), std::greater<int64_t>());
+
+    m_onePercent = formatRate(m_scratch, onePercentCount);
+
+    size_t pointOnePercentCount = (m_scratch.size() + 999) / 1000;
+    auto pointOnePercentEnd = m_scratch.begin() + pointOnePercentCount;
+
+    if (pointOnePercentEnd != onePercentEnd)
+      std::nth_element(m_scratch.begin(), pointOnePercentEnd,
+        onePercentEnd, std::greater<int64_t>());
+
+    m_pointOnePercent = formatRate(m_scratch, pointOnePercentCount);
+  }
+
+
+  std::string HudFpsLowItem::formatRate(
+    const std::vector<int64_t>& samples,
+          size_t                count) {
+    uint64_t duration = 0;
+
+    for (size_t i = 0; i < count; i++)
+      duration += uint64_t(samples[i]);
+
+    uint64_t rate = duration
+      ? (10'000'000'000ull * count + duration / 2) / duration
+      : 0;
+
+    return str::format(rate / 10, ".", rate % 10);
+  }
+
+
+  HudPos HudFpsLowItem::render(
+    const Rc<DxvkCommandList>&ctx,
+    const HudPipelineKey&     key,
+    const HudOptions&         options,
+          HudRenderer&        renderer,
+          HudPos              position) {
+    int32_t valueOffset = int32_t(renderer.textWidth(16, "0.1% low: "));
+
+    position.y += 16;
+    renderer.drawText(16, position, 0xff4040ffu, "1% low:");
+    renderer.drawText(16, { position.x + valueOffset, position.y },
+      0xffffffffu, m_onePercent);
+
+    position.y += 20;
+    renderer.drawText(16, position, 0xff4040ffu, "0.1% low:");
+    renderer.drawText(16, { position.x + valueOffset, position.y },
+      0xffffffffu, m_pointOnePercent);
 
     position.y += 8;
     return position;
