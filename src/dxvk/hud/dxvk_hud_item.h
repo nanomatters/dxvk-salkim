@@ -99,6 +99,12 @@ namespace dxvk::hud {
       return m_renderOptions;
     }
 
+    void addSystemInfoItems();
+
+    bool isEnabled(const char* name) const {
+      return m_enableFull || m_enabled.find(name) != m_enabled.end();
+    }
+
     /**
      * \brief Checks whether the item set is empty
      * \returns \c true if there are no items
@@ -117,19 +123,12 @@ namespace dxvk::hud {
      */
     template<typename T, typename... Args>
     Rc<T> add(const char* name, int32_t at, Args... args) {
-      bool enable = m_enableFull;
-
-      if (!enable) {
-        auto entry = m_enabled.find(name);
-        enable = entry != m_enabled.end();
-      }
-
       if (at < 0 || at > int32_t(m_items.size()))
         at = m_items.size();
 
       Rc<T> item;
 
-      if (enable) {
+      if (isEnabled(name)) {
         item = new T(std::forward<Args>(args)...);
         m_items.insert(m_items.begin() + at, item);
       }
@@ -157,6 +156,43 @@ namespace dxvk::hud {
     HudOptions                                    m_renderOptions;
 
     static void parseOption(const std::string& str, float& value);
+
+  };
+
+
+  /**
+   * \brief HUD item to display system information
+   */
+  class HudSystemInfoItem : public HudItem {
+
+  public:
+
+    enum Field : uint32_t {
+      Cpu     = 1u << 0,
+      Proton  = 1u << 1,
+      Wine    = 1u << 2,
+      Display = 1u << 3,
+      System  = Cpu | Proton | Display,
+      All     = System | Wine,
+    };
+
+    HudSystemInfoItem(uint32_t fields);
+
+    HudPos render(
+      const Rc<DxvkCommandList>&ctx,
+      const HudPipelineKey&     key,
+      const HudOptions&         options,
+            HudRenderer&        renderer,
+            HudPos              position);
+
+  private:
+
+    struct Line {
+      std::string label;
+      std::string value;
+    };
+
+    std::vector<Line> m_lines;
 
   };
 
