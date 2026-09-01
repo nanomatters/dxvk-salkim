@@ -1,6 +1,3 @@
-#include <algorithm>
-#include <cstring>
-
 #include "dxvk_hud.h"
 
 namespace dxvk::hud {
@@ -10,10 +7,6 @@ namespace dxvk::hud {
   : m_device        (device),
     m_renderer      (device),
     m_hudItems      (device) {
-    // Retrieve and sanitize options
-    m_options.scale = std::clamp(m_hudItems.getOption<float>("scale", 1.0f), 0.25f, 4.0f);
-    m_options.opacity = std::clamp(m_hudItems.getOption<float>("opacity", 1.0f), 0.1f, 1.0f);
-
     addItem<HudVersionItem>("version", -1);
     addItem<HudDeviceInfoItem>("devinfo", -1, m_device);
     addItem<HudFpsItem>("fps", -1);
@@ -47,10 +40,11 @@ namespace dxvk::hud {
       return;
 
     auto key = m_renderer.getPipelineKey(dstView);
+    const auto& options = m_hudItems.options();
 
-    m_renderer.beginFrame(ctx, dstView, m_options);
-    m_hudItems.render(ctx, key, m_options, m_renderer);
-    m_renderer.flushDraws(ctx, dstView, m_options);
+    m_renderer.beginFrame(ctx, dstView, options);
+    m_hudItems.render(ctx, key, options, m_renderer);
+    m_renderer.flushDraws(ctx, dstView, options);
     m_renderer.endFrame(ctx);
   }
 
