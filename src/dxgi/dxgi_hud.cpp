@@ -47,6 +47,7 @@ namespace dxvk {
     m_hudItems.add<hud::HudVersionItem>("version", -1);
     m_hudItems.add<hud::HudDeviceInfoItem>("devinfo", -1,
       std::move(deviceName), std::string(), std::string());
+    m_hudItems.addSystemInfoItems();
     m_hudItems.add<hud::HudFpsItem>("fps", -1);
     m_hudItems.add<hud::HudClientApiItem>("api", 1, "D3D12");
     m_vertices.reserve(MaxVertices);
