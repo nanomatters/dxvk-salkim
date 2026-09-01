@@ -54,6 +54,35 @@ struct DXGI_VK_FRAME_STATISTICS {
 
 
 /**
+ * \brief HUD vertex
+ */
+struct DXGI_VK_HUD_VERTEX {
+  FLOAT Position[2];
+  FLOAT Texcoord[2];
+  UINT  Color;
+  UINT  Padding;
+};
+
+static_assert(sizeof(DXGI_VK_HUD_VERTEX) == 24);
+
+
+/**
+ * \brief HUD frame data
+ */
+struct DXGI_VK_HUD_DATA {
+  UINT                      StructSize;
+  UINT                      VertexCount;
+  const DXGI_VK_HUD_VERTEX* pVertices;
+  FLOAT                     Scale;
+  FLOAT                     Opacity;
+  UINT                      FontWidth;
+  UINT                      FontHeight;
+  UINT                      FontDataSize;
+  const BYTE*               pFontData;
+};
+
+
+/**
  * \brief Private DXGI surface factory
  */
 MIDL_INTERFACE("1e7895a1-1bc3-4f9c-a670-290a4bc9581a")
@@ -151,6 +180,13 @@ IDXGIVkSwapChain3 : public IDXGIVkSwapChain2 {
 
   virtual HRESULT STDMETHODCALLTYPE SetRotation(
           DXGI_MODE_ROTATION        Rotation) = 0;
+};
+
+
+MIDL_INTERFACE("deb1f1b9-48c7-4310-b5a9-3b92f593023f")
+IDXGIVkSwapChainHud : public IDXGIVkSwapChain2 {
+  virtual HRESULT STDMETHODCALLTYPE SetHudData(
+    const DXGI_VK_HUD_DATA*         pData) = 0;
 };
 
 
@@ -466,5 +502,6 @@ __CRT_UUID_DECL(IDXGIVkSwapChain,          0xe4a9059e,0xb569,0x46ab,0x8d,0xe7,0x
 __CRT_UUID_DECL(IDXGIVkSwapChain1,         0x785326d4,0xb77b,0x4826,0xae,0x70,0x8d,0x08,0x30,0x8e,0xe6,0xd1);
 __CRT_UUID_DECL(IDXGIVkSwapChain2,         0xaed91093,0xe02e,0x458c,0xbd,0xef,0xa9,0x7d,0xa1,0xa7,0xe6,0xd2);
 __CRT_UUID_DECL(IDXGIVkSwapChain3,         0xfa25651a,0xae62,0x4ddd,0x90,0x86,0x29,0xea,0x31,0x44,0x82,0x0a);
+__CRT_UUID_DECL(IDXGIVkSwapChainHud,       0xdeb1f1b9,0x48c7,0x4310,0xb5,0xa9,0x3b,0x92,0xf5,0x93,0x02,0x3f);
 __CRT_UUID_DECL(IDXGIVkSwapChainFactory,   0xe7d6c3ca,0x23a0,0x4e08,0x9f,0x2f,0xea,0x52,0x31,0xdf,0x66,0x33);
 #endif
