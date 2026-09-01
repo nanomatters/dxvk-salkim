@@ -77,20 +77,34 @@ namespace dxvk::hud {
   };
 
 
-  /**
-   * \brief Text renderer for the HUD
-   * 
-   * Can be used by the presentation backend to
-   * display performance and driver information.
-   */
   class HudRenderer {
+
+  public:
+
+    virtual ~HudRenderer() { }
+
+    virtual void drawText(
+            uint32_t            size,
+            HudPos              pos,
+            uint32_t            color,
+      const std::string&        text) = 0;
+
+  };
+
+
+  /**
+   * \brief Vulkan HUD renderer
+   *
+   * Records HUD rendering through the DXVK Vulkan device.
+   */
+  class HudVulkanRenderer : public HudRenderer {
     constexpr static VkDeviceSize DataBufferSize = 16384;
   public:
     
-    HudRenderer(
+    HudVulkanRenderer(
       const Rc<DxvkDevice>&   device);
     
-    ~HudRenderer();
+    ~HudVulkanRenderer() override;
 
     void beginFrame(
       const Rc<DxvkCommandList>&ctx,
@@ -104,7 +118,7 @@ namespace dxvk::hud {
             uint32_t            size,
             HudPos              pos,
             uint32_t            color,
-      const std::string&        text);
+      const std::string&        text) override;
 
     void drawTextIndirect(
       const Rc<DxvkCommandList>&ctx,
