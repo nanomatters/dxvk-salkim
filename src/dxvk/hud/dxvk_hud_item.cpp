@@ -1,6 +1,8 @@
 #include "dxvk_hud_item.h"
 #include "dxvk_hud_info.h"
 
+#include "../../dxgi/dxgi_interfaces.h"
+
 #include <hud_chunk_frag_background.h>
 #include <hud_chunk_frag_visualize.h>
 #include <hud_chunk_vert_background.h>
@@ -21,6 +23,94 @@
 namespace dxvk::hud {
 
   namespace {
+
+    struct HudReflexMetricInfo {
+      const char* option;
+      const char* label;
+    };
+
+    constexpr std::array<HudReflexMetricInfo, size_t(HudReflexMetric::Count)> HudReflexMetrics = {{
+      { "reflex.id",       "Reflex frame:" },
+      { "reflex.interval", "Simulation interval:" },
+      { "reflex.input",    "Input sample:" },
+      { "reflex.sim",      "Simulation end:" },
+      { "reflex.submit",   "Submit start/end:" },
+      { "reflex.present",  "Present start/end:" },
+      { "reflex.driver",   "Driver start/end:" },
+      { "reflex.queue",    "OS queue start/end:" },
+      { "reflex.gpu",      "GPU start/end:" },
+      { "reflex.active",   "GPU active:" },
+      { "reflex.frame",    "GPU frame:" },
+      { "reflex.camera",   "Camera constructed:" },
+      { "reflex.copy",     "Cross adapter copy:" },
+      { "reflex.ai",       "AI frame:" },
+    }};
+
+
+    size_t reflexMetricIndex(HudReflexMetric metric) {
+      return size_t(metric);
+    }
+
+
+    std::string formatReflexMicroseconds(uint64_t durationUs) {
+      return str::format(durationUs / 1000, ".",
+        std::setfill('0'), std::setw(3), durationUs % 1000, " ms");
+    }
+
+
+    std::string formatReflexDuration(uint64_t durationUs) {
+      return durationUs ? formatReflexMicroseconds(durationUs) : "--";
+    }
+
+
+    std::string formatReflexSpan(uint64_t startUs, uint64_t endUs) {
+      return startUs && endUs >= startUs
+        ? formatReflexMicroseconds(endUs - startUs)
+        : "--";
+    }
+
+
+    std::string formatReflexOffset(uint64_t markerUs, uint64_t originUs) {
+      if (!markerUs || !originUs)
+        return "--";
+
+      if (markerUs >= originUs)
+        return str::format("+", formatReflexMicroseconds(markerUs - originUs));
+
+      return str::format("-", formatReflexMicroseconds(originUs - markerUs));
+    }
+
+
+    std::string formatReflexRange(
+            uint64_t              startUs,
+            uint64_t              endUs,
+            uint64_t              originUs) {
+      if (!startUs || !endUs || endUs < startUs)
+        return "--";
+
+      return str::format(formatReflexOffset(startUs, originUs), " / ",
+        formatReflexOffset(endUs, originUs));
+    }
+
+
+    bool isCompleteReflexReport(const D3D_LOW_LATENCY_FRAME_REPORT& report) {
+      return report.frameID
+          && report.simStartTime
+          && report.gpuRenderStartTime
+          && report.gpuRenderEndTime
+          && report.gpuRenderEndTime >= report.gpuRenderStartTime;
+    }
+
+
+    bool isOrderedReflexPair(
+      const D3D_LOW_LATENCY_FRAME_REPORT& previous,
+      const D3D_LOW_LATENCY_FRAME_REPORT& current) {
+      return isCompleteReflexReport(previous)
+          && isCompleteReflexReport(current)
+          && previous.frameID < current.frameID
+          && previous.simStartTime <= current.simStartTime
+          && previous.gpuRenderEndTime <= current.gpuRenderEndTime;
+    }
 
     class HudTextLayoutRenderer final : public HudRenderer {
 
@@ -277,6 +367,157 @@ namespace dxvk::hud {
       add<HudSystemInfoItem>("wine", -1, HudSystemInfoItem::Wine);
       add<HudSystemInfoItem>("winsys", -1, HudSystemInfoItem::Display);
     }
+  }
+
+
+  void HudItemSet::addReflexItems(
+          ID3DLowLatencyDevice* lowLatencyDevice) {
+    if (!lowLatencyDevice)
+      return;
+
+    if (isEnabled("reflex")) {
+      Rc<HudReflexData> data = new HudReflexData(lowLatencyDevice);
+      add<HudReflexItem>("reflex", -1, data, HudReflexMetric::Count);
+      return;
+    }
+
+    bool enabled = false;
+
+    for (const auto& metric : HudReflexMetrics)
+      enabled |= isEnabled(metric.option);
+
+    if (!enabled)
+      return;
+
+    Rc<HudReflexData> data = new HudReflexData(lowLatencyDevice);
+
+    for (size_t i = 0; i < HudReflexMetrics.size(); i++) {
+      add<HudReflexItem>(HudReflexMetrics[i].option, -1,
+        data, HudReflexMetric(i));
+    }
+  }
+
+
+  HudReflexData::HudReflexData(
+          ID3DLowLatencyDevice* lowLatencyDevice)
+  : m_lowLatencyDevice(lowLatencyDevice) {
+    m_lowLatencyDevice->AddRef();
+    m_values.fill("--");
+  }
+
+
+  HudReflexData::~HudReflexData() {
+    m_lowLatencyDevice->Release();
+  }
+
+
+  void HudReflexData::update(
+          dxvk::high_resolution_clock::time_point time) {
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+      time - m_lastUpdate).count();
+
+    if (m_lastUpdate.time_since_epoch().count() && elapsed < UpdateInterval)
+      return;
+
+    m_lastUpdate = time;
+
+    D3D_LOW_LATENCY_RESULTS results = { };
+    results.version = uint32_t(sizeof(results)) | (1u << 16);
+
+    if (FAILED(m_lowLatencyDevice->GetLatencyInfo(&results))) {
+      m_values.fill("--");
+      return;
+    }
+
+    const auto& report = results.frameReports[63];
+    const auto& previous = results.frameReports[62];
+
+    if (!isOrderedReflexPair(previous, report)) {
+      m_values.fill("--");
+      return;
+    }
+
+    m_values[reflexMetricIndex(HudReflexMetric::FrameId)] = str::format(report.frameID);
+    m_values[reflexMetricIndex(HudReflexMetric::SimulationInterval)] =
+      formatReflexSpan(previous.simStartTime, report.simStartTime);
+    m_values[reflexMetricIndex(HudReflexMetric::Input)] =
+      formatReflexOffset(report.inputSampleTime, report.simStartTime);
+    m_values[reflexMetricIndex(HudReflexMetric::Simulation)] =
+      formatReflexOffset(report.simEndTime, report.simStartTime);
+    m_values[reflexMetricIndex(HudReflexMetric::Submit)] =
+      formatReflexRange(report.renderSubmitStartTime,
+        report.renderSubmitEndTime, report.simStartTime);
+    m_values[reflexMetricIndex(HudReflexMetric::Present)] =
+      formatReflexRange(report.presentStartTime,
+        report.presentEndTime, report.simStartTime);
+    m_values[reflexMetricIndex(HudReflexMetric::Driver)] =
+      formatReflexRange(report.driverStartTime,
+        report.driverEndTime, report.simStartTime);
+    m_values[reflexMetricIndex(HudReflexMetric::Queue)] =
+      formatReflexRange(report.osRenderQueueStartTime,
+        report.osRenderQueueEndTime, report.simStartTime);
+    m_values[reflexMetricIndex(HudReflexMetric::Gpu)] =
+      formatReflexRange(report.gpuRenderStartTime,
+        report.gpuRenderEndTime, report.simStartTime);
+    m_values[reflexMetricIndex(HudReflexMetric::GpuActive)] =
+      formatReflexDuration(report.gpuActiveRenderTimeUs);
+    m_values[reflexMetricIndex(HudReflexMetric::GpuFrame)] =
+      formatReflexDuration(report.gpuFrameTimeUs);
+    m_values[reflexMetricIndex(HudReflexMetric::Camera)] =
+      formatReflexOffset(report.cameraConstructedTime, report.simStartTime);
+    m_values[reflexMetricIndex(HudReflexMetric::Copy)] =
+      formatReflexDuration(report.crossAdapterCopyTimeUs);
+    m_values[reflexMetricIndex(HudReflexMetric::Ai)] =
+      formatReflexDuration(report.aiFrameTimeUs);
+  }
+
+
+  const std::string& HudReflexData::value(
+          HudReflexMetric        metric) const {
+    return m_values[reflexMetricIndex(metric)];
+  }
+
+
+  HudReflexItem::HudReflexItem(
+    const Rc<HudReflexData>& data,
+          HudReflexMetric    metric)
+  : m_data(data), m_metric(metric) { }
+
+
+  void HudReflexItem::update(
+          dxvk::high_resolution_clock::time_point time) {
+    m_data->update(time);
+  }
+
+
+  HudPos HudReflexItem::render(
+    const Rc<DxvkCommandList>&ctx,
+    const HudPipelineKey&     key,
+    const HudOptions&         options,
+          HudRenderer&        renderer,
+          HudPos              position) {
+    size_t first = m_metric == HudReflexMetric::Count
+      ? 0
+      : reflexMetricIndex(m_metric);
+    size_t end = m_metric == HudReflexMetric::Count
+      ? HudReflexMetrics.size()
+      : first + 1;
+    uint32_t valueOffset = 0;
+
+    for (size_t i = first; i < end; i++)
+      valueOffset = std::max(valueOffset,
+        renderer.textWidth(16, HudReflexMetrics[i].label));
+
+    for (size_t i = first; i < end; i++) {
+      position.y += i == first ? 16 : 20;
+      renderer.drawText(16, position, 0xff60a0ffu,
+        HudReflexMetrics[i].label);
+      renderer.drawText(16, { position.x + int32_t(valueOffset), position.y },
+        0xffffffffu, m_data->value(HudReflexMetric(i)));
+    }
+
+    position.y += 8;
+    return position;
   }
 
 
