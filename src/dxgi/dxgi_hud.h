@@ -18,7 +18,8 @@ namespace dxvk {
 
     static std::unique_ptr<DxgiHud> create(
             IDXGIAdapter*           adapter,
-      const std::string&            fallbackConfig);
+      const std::string&            fallbackConfig,
+            int32_t                 fpsLowsWindow);
 
     void render(
             IDXGIVkSwapChainHud*     presenter,
@@ -31,7 +32,8 @@ namespace dxvk {
 
     explicit DxgiHud(
             std::string             config,
-            std::string             deviceName);
+            std::string             deviceName,
+            int32_t                 fpsLowsWindow);
 
     hud::HudItemSet                  m_hudItems;
     std::vector<DXGI_VK_HUD_VERTEX> m_vertices;
