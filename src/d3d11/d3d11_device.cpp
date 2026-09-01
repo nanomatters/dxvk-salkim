@@ -3627,9 +3627,19 @@ namespace dxvk {
       dst.osRenderQueueEndTime = src.osRenderQueueEndTimeUs;
       dst.gpuRenderStartTime = src.gpuRenderStartTimeUs;
       dst.gpuRenderEndTime = src.gpuRenderEndTimeUs;
-      // No great way to estimate GPU idle for any given frame
-      dst.gpuActiveRenderTimeUs = src.gpuRenderEndTimeUs - src.gpuRenderStartTimeUs;
-      dst.gpuFrameTimeUs = src.gpuRenderEndTimeUs - src.gpuRenderStartTimeUs;
+      // No great way to estimate GPU idle for any given frame.
+      uint64_t activeTimeUs = src.gpuRenderStartTimeUs && src.gpuRenderEndTimeUs >= src.gpuRenderStartTimeUs
+        ? src.gpuRenderEndTimeUs - src.gpuRenderStartTimeUs : 0u;
+      dst.gpuActiveRenderTimeUs = uint32_t(std::min<uint64_t>(activeTimeUs, UINT32_MAX));
+      dst.gpuFrameTimeUs = 0u;
+
+      if (i) {
+        uint64_t currentEnd = reports[i].gpuRenderEndTimeUs;
+        uint64_t previousEnd = reports[i - 1].gpuRenderEndTimeUs;
+
+        if (previousEnd && currentEnd >= previousEnd)
+          dst.gpuFrameTimeUs = uint32_t(std::min<uint64_t>(currentEnd - previousEnd, UINT32_MAX));
+      }
     }
 
     return S_OK;
