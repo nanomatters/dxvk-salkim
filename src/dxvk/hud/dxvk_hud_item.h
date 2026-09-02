@@ -116,6 +116,9 @@ namespace dxvk::hud {
     void addGpuTelemetryItems(
       const Rc<DxvkAdapter>&         adapter);
 
+    void addCpuTelemetryItems(
+      const Rc<DxvkAdapter>&         adapter);
+
     void addReflexItems(
             ID3DLowLatencyDevice* lowLatencyDevice);
 
@@ -349,6 +352,51 @@ namespace dxvk::hud {
   };
 
 
+  struct HudTelemetryMetricInfo {
+    const char* option;
+    const char* label;
+  };
+
+
+  class HudTelemetryData : public RcObject {
+  public:
+    virtual ~HudTelemetryData() { }
+
+    virtual void update(
+            dxvk::high_resolution_clock::time_point time) = 0;
+
+    virtual const std::string& value(size_t metric) const = 0;
+  };
+
+
+  class HudTelemetryItem : public HudItem {
+  public:
+    HudTelemetryItem(
+      const Rc<HudTelemetryData>& data,
+      const HudTelemetryMetricInfo* metrics,
+            size_t                metricCount,
+            size_t                metric,
+            uint32_t              labelColor);
+
+    void update(
+            dxvk::high_resolution_clock::time_point time);
+
+    HudPos render(
+      const Rc<DxvkCommandList>&ctx,
+      const HudPipelineKey&     key,
+      const HudOptions&         options,
+            HudRenderer&        renderer,
+            HudPos              position);
+
+  private:
+    Rc<HudTelemetryData> m_data;
+    const HudTelemetryMetricInfo* m_metrics;
+    size_t m_metricCount;
+    size_t m_metric;
+    uint32_t m_labelColor;
+  };
+
+
   enum class HudGpuTelemetryMetric : uint32_t {
     Name,
     Driver,
@@ -364,7 +412,7 @@ namespace dxvk::hud {
   };
 
 
-  class HudGpuTelemetryData : public RcObject {
+  class HudGpuTelemetryData : public HudTelemetryData {
     constexpr static int64_t UpdateInterval = 1'000'000;
   public:
 
@@ -373,9 +421,9 @@ namespace dxvk::hud {
             uint32_t         requested);
 
     void update(
-            dxvk::high_resolution_clock::time_point time);
+            dxvk::high_resolution_clock::time_point time) override;
 
-    const std::string& value(HudGpuTelemetryMetric metric) const;
+    const std::string& value(size_t metric) const override;
 
   private:
 
@@ -388,29 +436,34 @@ namespace dxvk::hud {
   };
 
 
-  class HudGpuTelemetryItem : public HudItem {
+  enum class HudCpuTelemetryMetric : uint32_t {
+    Name,
+    Power,
+    Temperature,
+    Utilization,
+    Clock,
+    Count,
+  };
 
+
+  class HudCpuTelemetryData : public HudTelemetryData {
+    constexpr static int64_t UpdateInterval = 1'000'000;
   public:
-
-    HudGpuTelemetryItem(
-      const Rc<HudGpuTelemetryData>& data,
-            HudGpuTelemetryMetric   metric);
+    HudCpuTelemetryData(
+      const Rc<DxvkAdapter>& adapter,
+            uint32_t         requested);
 
     void update(
-            dxvk::high_resolution_clock::time_point time);
+            dxvk::high_resolution_clock::time_point time) override;
 
-    HudPos render(
-      const Rc<DxvkCommandList>&ctx,
-      const HudPipelineKey&     key,
-      const HudOptions&         options,
-            HudRenderer&        renderer,
-            HudPos              position);
+    const std::string& value(size_t metric) const override;
 
   private:
-
-    Rc<HudGpuTelemetryData> m_data;
-    HudGpuTelemetryMetric   m_metric;
-
+    Rc<DxvkAdapter> m_adapter;
+    uint32_t m_requested;
+    bool m_supported = true;
+    std::array<std::string, size_t(HudCpuTelemetryMetric::Count)> m_values;
+    dxvk::high_resolution_clock::time_point m_lastUpdate;
   };
 
 

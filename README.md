@@ -61,7 +61,12 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `gpu.memload`: Displays memory-controller utilization.
 - `gpu.pcie`: Displays the current and maximum PCIe link configuration.
 - `systeminfo`: Displays the CPU, Proton build, and window system.
-- `cpu`: Displays the CPU model.
+- `cpu`: Displays all available CPU information and telemetry.
+- `cpu.name`: Displays the CPU model.
+- `cpu.power`: Displays CPU package power draw and the current power limit in watts.
+- `cpu.temp`: Displays CPU package temperature.
+- `cpu.load`: Displays aggregate CPU utilization.
+- `cpu.clock`: Displays the average current and maximum CPU clock.
 - `proton`: Displays the Proton build.
 - `wine`: Displays the Wine version and build.
 - `winsys`: Displays the window system.
