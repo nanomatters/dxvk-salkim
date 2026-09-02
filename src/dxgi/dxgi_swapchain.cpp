@@ -50,7 +50,7 @@ namespace dxvk {
 
       if (m_presenterHud) {
         const auto& options = m_factory->GetDXVKInstance()->options();
-        m_hud = DxgiHud::create(m_adapter.ptr(), lowLatencyDevice.ptr(),
+        m_hud = DxgiHud::create(m_adapter.ptr(), lowLatencyDevice.ptr(), m_presenter.ptr(),
           options.hud, options.hudFpsLowsWindow);
       }
     }
