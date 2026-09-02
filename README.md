@@ -49,6 +49,17 @@ Manipulation of Direct3D libraries in multi-player games may be considered cheat
 ### HUD
 The `DXVK_HUD` environment variable controls a HUD which can display the framerate and some stat counters. It accepts a comma-separated list of the following options:
 - `devinfo`: Displays the name of the GPU and the driver version.
+- `gpu`: Displays all available GPU information and telemetry.
+- `gpu.name`: Displays the GPU device name.
+- `gpu.driver`: Displays the Vulkan driver name and version.
+- `gpu.power`: Displays GPU power draw and the current power limit in watts.
+- `gpu.temp`: Displays GPU temperature.
+- `gpu.load`: Displays device-reported GPU utilization.
+- `gpu.clock`: Displays the current graphics clock.
+- `gpu.memclock`: Displays the current memory clock.
+- `gpu.vram`: Displays device-wide VRAM usage.
+- `gpu.memload`: Displays memory-controller utilization.
+- `gpu.pcie`: Displays the current and maximum PCIe link configuration.
 - `systeminfo`: Displays the CPU, Proton build, and window system.
 - `cpu`: Displays the CPU model.
 - `proton`: Displays the Proton build.
@@ -83,7 +94,7 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `descriptors`: Shows the number of descriptor pools and descriptor sets.
 - `memory`: Shows the amount of device memory allocated and used.
 - `allocations`: Shows detailed memory chunk suballocation info.
-- `gpuload`: Shows estimated GPU load. May be inaccurate.
+- `gpuload`: Shows legacy DXVK-estimated GPU load. May be inaccurate.
 - `version`: Shows DXVK version.
 - `api`: Shows the D3D feature level used by the application.
 - `cs`: Shows worker thread statistics.
