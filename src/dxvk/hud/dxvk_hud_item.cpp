@@ -61,12 +61,7 @@ namespace dxvk::hud {
       { "latency.interval", "Display interval:" },
     }};
 
-    struct HudGpuTelemetryMetricInfo {
-      const char* option;
-      const char* label;
-    };
-
-    constexpr std::array<HudGpuTelemetryMetricInfo,
+    constexpr std::array<HudTelemetryMetricInfo,
       size_t(HudGpuTelemetryMetric::Count)> HudGpuTelemetryMetrics = {{
       { "gpu.name",     "GPU:"          },
       { "gpu.driver",   "GPU driver:"   },
@@ -80,9 +75,19 @@ namespace dxvk::hud {
       { "gpu.pcie",     "PCIe:"         },
     }};
 
+    constexpr std::array<HudTelemetryMetricInfo,
+      size_t(HudCpuTelemetryMetric::Count)> HudCpuTelemetryMetrics = {{
+      { "cpu.name",  "CPU:"       },
+      { "cpu.power", "CPU power:" },
+      { "cpu.temp",  "CPU temp:"  },
+      { "cpu.load",  "CPU load:"  },
+      { "cpu.clock", "CPU clock:" },
+    }};
+
     constexpr uint32_t HudReflexLabelColor = 0xff60ff60u;
     constexpr uint32_t HudPresentTelemetryLabelColor = 0xff40ffffu;
     constexpr uint32_t HudGpuTelemetryLabelColor = 0xffffff40u;
+    constexpr uint32_t HudCpuTelemetryLabelColor = 0xffff8040u;
     constexpr uint32_t HudTelemetryValueColor = 0xffffffffu;
 
 
@@ -412,7 +417,6 @@ namespace dxvk::hud {
       add<HudSystemInfoItem>("systeminfo", -1, HudSystemInfoItem::System);
       add<HudSystemInfoItem>("wine", -1, HudSystemInfoItem::Wine);
     } else {
-      add<HudSystemInfoItem>("cpu", -1, HudSystemInfoItem::Cpu);
       add<HudSystemInfoItem>("proton", -1, HudSystemInfoItem::Proton);
       add<HudSystemInfoItem>("wine", -1, HudSystemInfoItem::Wine);
       add<HudSystemInfoItem>("winsys", -1, HudSystemInfoItem::Display);
@@ -449,16 +453,50 @@ namespace dxvk::hud {
     if (!info && !requested)
       return;
 
-    Rc<HudGpuTelemetryData> data = new HudGpuTelemetryData(adapter, requested);
+    Rc<HudTelemetryData> data = new HudGpuTelemetryData(adapter, requested);
 
     if (group) {
-      add<HudGpuTelemetryItem>("gpu", -1, data, HudGpuTelemetryMetric::Count);
+      add<HudTelemetryItem>("gpu", -1, data, HudGpuTelemetryMetrics.data(),
+        HudGpuTelemetryMetrics.size(), HudGpuTelemetryMetrics.size(), HudGpuTelemetryLabelColor);
       return;
     }
 
     for (size_t i = 0; i < HudGpuTelemetryMetrics.size(); i++) {
-      add<HudGpuTelemetryItem>(HudGpuTelemetryMetrics[i].option, -1,
-        data, HudGpuTelemetryMetric(i));
+      add<HudTelemetryItem>(HudGpuTelemetryMetrics[i].option, -1, data,
+        HudGpuTelemetryMetrics.data(), HudGpuTelemetryMetrics.size(), i, HudGpuTelemetryLabelColor);
+    }
+  }
+
+
+  void HudItemSet::addCpuTelemetryItems(
+    const Rc<DxvkAdapter>& adapter) {
+    uint32_t requested = 0;
+    bool group = isEnabled("cpu");
+    bool info = group || isEnabled("cpu.name");
+
+    if (group || isEnabled("cpu.power"))
+      requested |= D3DKMT_WINE_CPU_TELEMETRY_POWER
+                |  D3DKMT_WINE_CPU_TELEMETRY_POWER_LIMIT;
+    if (group || isEnabled("cpu.temp"))
+      requested |= D3DKMT_WINE_CPU_TELEMETRY_TEMPERATURE;
+    if (group || isEnabled("cpu.load"))
+      requested |= D3DKMT_WINE_CPU_TELEMETRY_UTILIZATION;
+    if (group || isEnabled("cpu.clock"))
+      requested |= D3DKMT_WINE_CPU_TELEMETRY_CLOCK;
+    if (!info && !requested)
+      return;
+
+    Rc<HudTelemetryData> data = new HudCpuTelemetryData(adapter, requested);
+
+    if (group) {
+      add<HudTelemetryItem>("cpu", -1, data, HudCpuTelemetryMetrics.data(),
+        HudCpuTelemetryMetrics.size(), HudCpuTelemetryMetrics.size(), HudCpuTelemetryLabelColor);
+      return;
+    }
+
+    for (size_t i = 0; i < HudCpuTelemetryMetrics.size(); i++) {
+      add<HudTelemetryItem>(HudCpuTelemetryMetrics[i].option, -1, data,
+        HudCpuTelemetryMetrics.data(), HudCpuTelemetryMetrics.size(), i, HudCpuTelemetryLabelColor);
     }
   }
 
@@ -1052,50 +1090,150 @@ namespace dxvk::hud {
   }
 
 
-  const std::string& HudGpuTelemetryData::value(HudGpuTelemetryMetric metric) const {
-    return m_values[size_t(metric)];
+  const std::string& HudGpuTelemetryData::value(size_t metric) const {
+    return m_values[metric];
   }
 
 
-  HudGpuTelemetryItem::HudGpuTelemetryItem(
-    const Rc<HudGpuTelemetryData>& data,
-          HudGpuTelemetryMetric   metric)
-  : m_data  (data),
-    m_metric(metric) { }
+  HudCpuTelemetryData::HudCpuTelemetryData(
+    const Rc<DxvkAdapter>& adapter,
+          uint32_t         requested)
+  : m_adapter  (adapter),
+    m_requested(requested) {
+    m_values.fill("--");
+
+    const auto& cpuName = HudSystemInfo::get().cpuName;
+    if (!cpuName.empty())
+      m_values[size_t(HudCpuTelemetryMetric::Name)] = cpuName;
+
+    if (m_requested)
+      update(dxvk::high_resolution_clock::now());
+  }
 
 
-  void HudGpuTelemetryItem::update(
+  void HudCpuTelemetryData::update(
+          dxvk::high_resolution_clock::time_point time) {
+    if (!m_supported || !m_requested)
+      return;
+
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(time - m_lastUpdate);
+
+    if (elapsed.count() < UpdateInterval)
+      return;
+
+    m_lastUpdate = time;
+
+    D3DKMT_WINE_CPU_TELEMETRY data = { };
+    D3DKMT_QUERYADAPTERINFO query = { };
+
+    for (size_t i = size_t(HudCpuTelemetryMetric::Power); i < m_values.size(); i++)
+      m_values[i] = "--";
+
+    data.Requested = m_requested;
+    query.hAdapter = m_adapter ? m_adapter->kmtLocal() : 0;
+    query.Type = KMTQAITYPE_WINE_CPU_TELEMETRY;
+    query.pPrivateDriverData = &data;
+    query.PrivateDriverDataSize = sizeof(data);
+
+    NTSTATUS status = query.hAdapter
+      ? D3DKMTQueryAdapterInfo(&query)
+      : D3DKMT_STATUS_NOT_IMPLEMENTED;
+
+    if (status >= 0) {
+      std::string power = "--";
+      std::string powerLimit = "--";
+
+      if (data.Valid & D3DKMT_WINE_CPU_TELEMETRY_POWER) {
+        uint64_t deciwatts = (data.PowerMicrowatts + 50'000) / 100'000;
+        power = str::format(deciwatts / 10, ".", deciwatts % 10);
+      }
+
+      if (data.Valid & D3DKMT_WINE_CPU_TELEMETRY_POWER_LIMIT) {
+        uint64_t deciwatts = (uint64_t(data.PowerLimitMilliwatts) + 50) / 100;
+        powerLimit = str::format(deciwatts / 10, ".", deciwatts % 10);
+      }
+
+      if (m_requested & D3DKMT_WINE_CPU_TELEMETRY_POWER)
+        m_values[size_t(HudCpuTelemetryMetric::Power)] =
+          str::format(power, " / ", powerLimit, " W");
+
+      if (data.Valid & D3DKMT_WINE_CPU_TELEMETRY_TEMPERATURE) {
+        m_values[size_t(HudCpuTelemetryMetric::Temperature)] =
+          str::format(data.TemperatureDeciCelsius / 10, ".",
+          data.TemperatureDeciCelsius % 10, " C");
+      }
+
+      if (data.Valid & D3DKMT_WINE_CPU_TELEMETRY_UTILIZATION)
+        m_values[size_t(HudCpuTelemetryMetric::Utilization)] =
+          str::format(data.UtilizationPercent, "%");
+
+      if (data.Valid & D3DKMT_WINE_CPU_TELEMETRY_CLOCK) {
+        uint64_t average = (uint64_t(data.AverageClockKHz) + 500) / 1000;
+
+        if (data.MaximumClockKHz) {
+          uint64_t maximum = (uint64_t(data.MaximumClockKHz) + 500) / 1000;
+          m_values[size_t(HudCpuTelemetryMetric::Clock)] =
+            str::format(average, " / ", maximum, " MHz");
+        } else {
+          m_values[size_t(HudCpuTelemetryMetric::Clock)] =
+            str::format(average, " MHz");
+        }
+      }
+    } else if (status == D3DKMT_STATUS_NOT_IMPLEMENTED) {
+      m_supported = false;
+    }
+  }
+
+
+  const std::string& HudCpuTelemetryData::value(size_t metric) const {
+    return m_values[metric];
+  }
+
+
+  HudTelemetryItem::HudTelemetryItem(
+    const Rc<HudTelemetryData>& data,
+    const HudTelemetryMetricInfo* metrics,
+          size_t                metricCount,
+          size_t                metric,
+          uint32_t              labelColor)
+  : m_data       (data),
+    m_metrics    (metrics),
+    m_metricCount(metricCount),
+    m_metric     (metric),
+    m_labelColor (labelColor) { }
+
+
+  void HudTelemetryItem::update(
           dxvk::high_resolution_clock::time_point time) {
     m_data->update(time);
   }
 
 
-  HudPos HudGpuTelemetryItem::render(
+  HudPos HudTelemetryItem::render(
     const Rc<DxvkCommandList>&ctx,
     const HudPipelineKey&     key,
     const HudOptions&         options,
           HudRenderer&        renderer,
           HudPos              position) {
-    size_t first = m_metric == HudGpuTelemetryMetric::Count
+    size_t first = m_metric == m_metricCount
       ? 0
-      : size_t(m_metric);
-    size_t end = m_metric == HudGpuTelemetryMetric::Count
-      ? HudGpuTelemetryMetrics.size()
+      : m_metric;
+    size_t end = m_metric == m_metricCount
+      ? m_metricCount
       : first + 1;
     uint32_t valueOffset = 0;
 
     for (size_t i = first; i < end; i++)
       valueOffset = std::max(valueOffset,
-        renderer.textWidth(16, HudGpuTelemetryMetrics[i].label));
+        renderer.textWidth(16, m_metrics[i].label));
 
     valueOffset += renderer.textWidth(16, " ");
 
     for (size_t i = first; i < end; i++) {
       position.y += 20;
-      renderer.drawText(16, position, HudGpuTelemetryLabelColor,
-        HudGpuTelemetryMetrics[i].label);
+      renderer.drawText(16, position, m_labelColor, m_metrics[i].label);
       renderer.drawText(16, { position.x + int32_t(valueOffset), position.y },
-        HudTelemetryValueColor, m_data->value(HudGpuTelemetryMetric(i)));
+        HudTelemetryValueColor, m_data->value(i));
     }
 
     position.y += 8;
