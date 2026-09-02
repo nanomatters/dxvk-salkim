@@ -12,6 +12,7 @@ namespace dxvk::hud {
     addItem<HudVersionItem>("version", -1);
     addItem<HudDeviceInfoItem>("devinfo", -1, m_device);
     m_hudItems.addSystemInfoItems();
+    m_hudItems.addCpuTelemetryItems(device->adapter());
     m_hudItems.addGpuTelemetryItems(device->adapter());
     addItem<HudFpsItem>("fps", -1);
     addItem<HudFpsLowItem>("fps_lows", -1, m_hudItems.fpsLowsWindowNs());
