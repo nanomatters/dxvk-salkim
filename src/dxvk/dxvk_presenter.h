@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <optional>
 #include <queue>
@@ -64,6 +65,23 @@ namespace dxvk {
     uint64_t                deadline      = 0u;
     bool                    isTimed       = false;
     bool                    doWait        = false;
+  };
+
+  enum PresenterTelemetryValid : uint32_t {
+    PresenterTelemetryQueue    = 1u << 0,
+    PresenterTelemetryDisplay  = 1u << 1,
+    PresenterTelemetryPresent  = 1u << 2,
+    PresenterTelemetryInterval = 1u << 3,
+  };
+
+  struct PresenterTelemetry {
+    uint32_t validFields = 0u;
+    uint64_t presentId = 0u;
+    uint64_t queueDurationNs = 0u;
+    uint64_t displayDurationNs = 0u;
+    uint64_t presentDurationNs = 0u;
+    uint64_t displayIntervalNs = 0u;
+    VkPresentStageFlagsEXT completionStage = 0u;
   };
 
   /**
@@ -342,6 +360,11 @@ namespace dxvk {
      */
     PresenterTimingFeedback queryPresentTiming();
 
+    void setPresentTelemetryEnabled(bool enable);
+
+    bool getPresentTelemetry(
+            PresenterTelemetry&     telemetry);
+
   private:
 
     Rc<DxvkDevice>              m_device;
@@ -376,6 +399,23 @@ namespace dxvk {
     bool                        m_hasPresentWait = false;
     bool                        m_hasSwapchainMaintenance1 = false;
     bool                        m_hasIncrementalPresent = false;
+
+    std::atomic<bool>           m_presentTelemetryEnabled = { false };
+    bool                        m_presentTelemetrySupported = false;
+    VkPresentStageFlagsEXT      m_presentTelemetryStage = 0u;
+
+    struct PresentQueueTime {
+      uint64_t presentId = 0u;
+      uint64_t timeNs = 0u;
+    };
+
+    std::array<PresentQueueTime, FrameQueueSize> m_presentQueueTimes;
+    uint64_t                    m_previousPresentCompleteId = 0u;
+    uint64_t                    m_previousPresentCompleteNs = 0u;
+
+    dxvk::mutex                 m_presentTelemetryMutex;
+    PresenterTelemetry          m_presentTelemetry;
+    std::array<uint64_t, 4>     m_presentTelemetryFieldIds;
 
     VkPresentModeKHR            m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
 
@@ -513,6 +553,17 @@ namespace dxvk {
     void pushFrame(const PresenterFrame& frame);
 
     void runFrameThread();
+
+    void accumulatePresentTelemetry(
+      const VkPastPresentationTimingEXT& timing);
+
+    bool calibratePresentTelemetry(
+            VkTimeDomainKHR          timeDomain,
+            uint64_t                 timeDomainId,
+            uint64_t                 queueTime,
+            uint64_t                 completeTime,
+            uint64_t*                queueTimeNs,
+            uint64_t*                completeTimeNs);
 
     static VkResult softError(
             VkResult                  vr);

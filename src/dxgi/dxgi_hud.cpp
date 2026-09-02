@@ -12,6 +12,7 @@ namespace dxvk {
   std::unique_ptr<DxgiHud> DxgiHud::create(
           IDXGIAdapter*           adapter,
           ID3DLowLatencyDevice*   lowLatencyDevice,
+          IDXGIVkSwapChain*       presenter,
     const std::string&            fallbackConfig,
           int32_t                 fpsLowsWindow) {
     std::string configString = env::getEnvVar("DXVK_HUD");
@@ -33,7 +34,7 @@ namespace dxvk {
 
     auto result = std::unique_ptr<DxgiHud>(
       new DxgiHud(std::move(configString), std::move(deviceName),
-        lowLatencyDevice, fpsLowsWindow));
+        lowLatencyDevice, presenter, fpsLowsWindow));
 
     if (result->m_hudItems.empty())
       return nullptr;
@@ -47,6 +48,7 @@ namespace dxvk {
           std::string             config,
           std::string             deviceName,
           ID3DLowLatencyDevice*   lowLatencyDevice,
+          IDXGIVkSwapChain*       presenter,
           int32_t                 fpsLowsWindow)
   : m_hudItems(std::move(config), fpsLowsWindow) {
     m_hudItems.add<hud::HudVersionItem>("version", -1);
@@ -58,6 +60,14 @@ namespace dxvk {
       m_hudItems.fpsLowsWindowNs());
     m_hudItems.add<hud::HudClientApiItem>("api", 1, "D3D12");
     m_hudItems.addReflexItems(lowLatencyDevice);
+
+    if (m_hudItems.presentTelemetryEnabled()) {
+      Com<IDXGIVkSwapChainPresentTelemetry> presentTelemetry;
+      presenter->QueryInterface(__uuidof(IDXGIVkSwapChainPresentTelemetry),
+        reinterpret_cast<void**>(&presentTelemetry));
+      m_hudItems.addPresentTelemetryItems(presentTelemetry.ptr());
+    }
+
     m_vertices.reserve(MaxVertices);
   }
 
