@@ -12,6 +12,7 @@ namespace dxvk::hud {
     addItem<HudVersionItem>("version", -1);
     addItem<HudDeviceInfoItem>("devinfo", -1, m_device);
     m_hudItems.addSystemInfoItems();
+    m_hudItems.addGpuTelemetryItems(device->adapter());
     addItem<HudFpsItem>("fps", -1);
     addItem<HudFpsLowItem>("fps_lows", -1, m_hudItems.fpsLowsWindowNs());
     addItem<HudFrameTimeItem>("frametimes", -1, device, &m_renderer);
@@ -22,7 +23,8 @@ namespace dxvk::hud {
     addItem<HudMemoryStatsItem>("memory", -1, device);
     addItem<HudMemoryDetailsItem>("allocations", -1, device, &m_renderer);
     addItem<HudCsThreadItem>("cs", -1, device);
-    addItem<HudGpuLoadItem>("gpuload", -1, device);
+    if (!m_hudItems.isEnabled("gpu") || m_hudItems.isExplicitlyEnabled("gpuload"))
+      addItem<HudGpuLoadItem>("gpuload", -1, device);
     addItem<HudCompilerActivityItem>("compiler", -1, device);
     m_hudItems.addReflexItems(lowLatencyDevice);
     m_hudItems.addPresentTelemetryItems(presenter);
