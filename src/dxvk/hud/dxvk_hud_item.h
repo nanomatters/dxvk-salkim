@@ -113,6 +113,9 @@ namespace dxvk::hud {
 
     void addSystemInfoItems();
 
+    void addGpuTelemetryItems(
+      const Rc<DxvkAdapter>&         adapter);
+
     void addReflexItems(
             ID3DLowLatencyDevice* lowLatencyDevice);
 
@@ -126,6 +129,10 @@ namespace dxvk::hud {
 
     bool isEnabled(const char* name) const {
       return m_enableFull || m_enabled.find(name) != m_enabled.end();
+    }
+
+    bool isExplicitlyEnabled(const char* name) const {
+      return m_enabled.find(name) != m_enabled.end();
     }
 
     /**
@@ -338,6 +345,71 @@ namespace dxvk::hud {
 
     Rc<HudPresentTelemetryData> m_data;
     HudPresentTelemetryMetric   m_metric;
+
+  };
+
+
+  enum class HudGpuTelemetryMetric : uint32_t {
+    Name,
+    Driver,
+    Power,
+    Temperature,
+    Utilization,
+    GraphicsClock,
+    MemoryClock,
+    Vram,
+    MemoryUtilization,
+    Pcie,
+    Count,
+  };
+
+
+  class HudGpuTelemetryData : public RcObject {
+    constexpr static int64_t UpdateInterval = 1'000'000;
+  public:
+
+    HudGpuTelemetryData(
+      const Rc<DxvkAdapter>& adapter,
+            uint32_t         requested);
+
+    void update(
+            dxvk::high_resolution_clock::time_point time);
+
+    const std::string& value(HudGpuTelemetryMetric metric) const;
+
+  private:
+
+    Rc<DxvkAdapter> m_adapter;
+    uint32_t m_requested;
+    bool m_supported = true;
+    std::array<std::string, size_t(HudGpuTelemetryMetric::Count)> m_values;
+    dxvk::high_resolution_clock::time_point m_lastUpdate;
+
+  };
+
+
+  class HudGpuTelemetryItem : public HudItem {
+
+  public:
+
+    HudGpuTelemetryItem(
+      const Rc<HudGpuTelemetryData>& data,
+            HudGpuTelemetryMetric   metric);
+
+    void update(
+            dxvk::high_resolution_clock::time_point time);
+
+    HudPos render(
+      const Rc<DxvkCommandList>&ctx,
+      const HudPipelineKey&     key,
+      const HudOptions&         options,
+            HudRenderer&        renderer,
+            HudPos              position);
+
+  private:
+
+    Rc<HudGpuTelemetryData> m_data;
+    HudGpuTelemetryMetric   m_metric;
 
   };
 

@@ -89,6 +89,10 @@ namespace dxvk {
     return -1;
   }
 
+  NTSTATUS D3DKMTQueryAdapterInfo(D3DKMT_QUERYADAPTERINFO *desc) {
+    return D3DKMT_STATUS_NOT_IMPLEMENTED;
+  }
+
   NTSTATUS D3DKMTQueryResourceInfo(D3DKMT_QUERYRESOURCEINFO *desc) {
     Logger::warn("D3DKMTQueryResourceInfo: Not available on this platform.");
     return -1;
