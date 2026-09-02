@@ -84,6 +84,37 @@ struct DXGI_VK_HUD_DATA {
 };
 
 
+enum DXGI_VK_PRESENT_TELEMETRY_VALID : UINT {
+  DXGI_VK_PRESENT_TELEMETRY_QUEUE    = 1u << 0,
+  DXGI_VK_PRESENT_TELEMETRY_DISPLAY  = 1u << 1,
+  DXGI_VK_PRESENT_TELEMETRY_PRESENT  = 1u << 2,
+  DXGI_VK_PRESENT_TELEMETRY_INTERVAL = 1u << 3,
+};
+
+
+/**
+ * \brief Presentation telemetry
+ *
+ * Durations use nanoseconds. Each valid field contains its latest available
+ * value. PresentId is the newest processed report, and CompletionStage
+ * identifies the best available presentation stage used as PresentComplete.
+ * DisplayIntervalNs is valid only for first pixel visible timestamps.
+ */
+struct DXGI_VK_PRESENT_TELEMETRY {
+  UINT   StructSize;
+  UINT   ValidFields;
+  UINT64 PresentId;
+  UINT64 QueueDurationNs;
+  UINT64 DisplayDurationNs;
+  UINT64 PresentDurationNs;
+  UINT64 DisplayIntervalNs;
+  UINT   CompletionStage;
+  UINT   Reserved;
+};
+
+static_assert(sizeof(DXGI_VK_PRESENT_TELEMETRY) == 56);
+
+
 /**
  * \brief Frame reports used for Reflex interop
  */
@@ -257,6 +288,17 @@ MIDL_INTERFACE("deb1f1b9-48c7-4310-b5a9-3b92f593023f")
 IDXGIVkSwapChainHud : public IDXGIVkSwapChain2 {
   virtual HRESULT STDMETHODCALLTYPE SetHudData(
     const DXGI_VK_HUD_DATA*         pData) = 0;
+};
+
+
+// This private interface is versioned by its GUID.
+MIDL_INTERFACE("0363406f-8d3b-43d9-984f-5c9cf8a2cc0b")
+IDXGIVkSwapChainPresentTelemetry : public IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE SetEnabled(
+          BOOL                      Enable) = 0;
+
+  virtual HRESULT STDMETHODCALLTYPE GetData(
+          DXGI_VK_PRESENT_TELEMETRY* pData) = 0;
 };
 
 
@@ -573,6 +615,7 @@ __CRT_UUID_DECL(IDXGIVkSwapChain1,         0x785326d4,0xb77b,0x4826,0xae,0x70,0x
 __CRT_UUID_DECL(IDXGIVkSwapChain2,         0xaed91093,0xe02e,0x458c,0xbd,0xef,0xa9,0x7d,0xa1,0xa7,0xe6,0xd2);
 __CRT_UUID_DECL(IDXGIVkSwapChain3,         0xfa25651a,0xae62,0x4ddd,0x90,0x86,0x29,0xea,0x31,0x44,0x82,0x0a);
 __CRT_UUID_DECL(IDXGIVkSwapChainHud,       0xdeb1f1b9,0x48c7,0x4310,0xb5,0xa9,0x3b,0x92,0xf5,0x93,0x02,0x3f);
+__CRT_UUID_DECL(IDXGIVkSwapChainPresentTelemetry, 0x0363406f,0x8d3b,0x43d9,0x98,0x4f,0x5c,0x9c,0xf8,0xa2,0xcc,0x0b);
 __CRT_UUID_DECL(IDXGIVkSwapChainFactory,   0xe7d6c3ca,0x23a0,0x4e08,0x9f,0x2f,0xea,0x52,0x31,0xdf,0x66,0x33);
 __CRT_UUID_DECL(ID3DLowLatencyDevice,      0xf3112584,0x41f9,0x348d,0xa5,0x9b,0x00,0xb7,0xe1,0xd2,0x85,0xd6);
 #endif

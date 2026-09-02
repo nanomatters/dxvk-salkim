@@ -13,6 +13,11 @@
 #include "dxvk_hud_renderer.h"
 
 struct ID3DLowLatencyDevice;
+struct IDXGIVkSwapChainPresentTelemetry;
+
+namespace dxvk {
+  class Presenter;
+}
 
 namespace dxvk::hud {
 
@@ -110,6 +115,14 @@ namespace dxvk::hud {
 
     void addReflexItems(
             ID3DLowLatencyDevice* lowLatencyDevice);
+
+    void addPresentTelemetryItems(
+      const Rc<Presenter>&         presenter);
+
+    void addPresentTelemetryItems(
+            IDXGIVkSwapChainPresentTelemetry* presenter);
+
+    bool presentTelemetryEnabled() const;
 
     bool isEnabled(const char* name) const {
       return m_enableFull || m_enabled.find(name) != m_enabled.end();
@@ -253,6 +266,78 @@ namespace dxvk::hud {
 
     Rc<HudReflexData> m_data;
     HudReflexMetric   m_metric;
+
+  };
+
+
+  enum class HudPresentTelemetryMetric : uint32_t {
+    Queue,
+    Display,
+    Present,
+    Interval,
+    Count,
+  };
+
+
+  /**
+   * \brief Shared presentation telemetry
+   */
+  class HudPresentTelemetryData : public RcObject {
+    constexpr static int64_t UpdateInterval = 500'000;
+  public:
+
+    HudPresentTelemetryData(
+            Presenter*             presenter);
+
+    HudPresentTelemetryData(
+            IDXGIVkSwapChainPresentTelemetry* presenter);
+
+    ~HudPresentTelemetryData();
+
+    void update(
+            dxvk::high_resolution_clock::time_point time);
+
+    const std::string& value(
+            HudPresentTelemetryMetric metric) const;
+
+  private:
+
+    Rc<Presenter>                   m_presenter;
+    IDXGIVkSwapChainPresentTelemetry* m_dxgiPresenter = nullptr;
+
+    std::array<std::string,
+      size_t(HudPresentTelemetryMetric::Count)> m_values;
+
+    dxvk::high_resolution_clock::time_point m_lastUpdate;
+
+  };
+
+
+  /**
+   * \brief Presentation telemetry item
+   */
+  class HudPresentTelemetryItem : public HudItem {
+
+  public:
+
+    HudPresentTelemetryItem(
+      const Rc<HudPresentTelemetryData>& data,
+            HudPresentTelemetryMetric   metric);
+
+    void update(
+            dxvk::high_resolution_clock::time_point time);
+
+    HudPos render(
+      const Rc<DxvkCommandList>&ctx,
+      const HudPipelineKey&     key,
+      const HudOptions&         options,
+            HudRenderer&        renderer,
+            HudPos              position);
+
+  private:
+
+    Rc<HudPresentTelemetryData> m_data;
+    HudPresentTelemetryMetric   m_metric;
 
   };
 
