@@ -30,11 +30,12 @@ namespace dxvk {
 
   private:
 
-    constexpr static size_t MaxVertices = 4096;
+    constexpr static size_t MaxVertices = 8192;
 
     explicit DxgiHud(
             std::string             config,
             std::string             deviceName,
+      const Rc<DxvkAdapter>&         adapter,
             ID3DLowLatencyDevice*   lowLatencyDevice,
             IDXGIVkSwapChain*       presenter,
             int32_t                 fpsLowsWindow);
