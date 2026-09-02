@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <ctime>
 
 #include "dxvk_device.h"
 #include "dxvk_presenter.h"
@@ -6,6 +7,66 @@
 #include "../wsi/wsi_window.h"
 
 namespace dxvk {
+
+  namespace {
+
+    uint64_t presentTelemetryCounterToNs(uint64_t counter) {
+#if defined(_WIN32) && !defined(__WINE__)
+      uint64_t frequency = uint64_t(high_resolution_clock::get_frequency());
+      return counter / frequency * 1'000'000'000u
+           + counter % frequency * 1'000'000'000u / frequency;
+#else
+      return counter;
+#endif
+    }
+
+
+    uint64_t presentTelemetryNowNs() {
+#if defined(_WIN32) && !defined(__WINE__)
+      return presentTelemetryCounterToNs(
+        uint64_t(high_resolution_clock::get_counter()));
+#else
+      timespec time = { };
+      clock_gettime(CLOCK_MONOTONIC_RAW, &time);
+      return uint64_t(time.tv_sec) * 1'000'000'000u + uint64_t(time.tv_nsec);
+#endif
+    }
+
+
+    VkTimeDomainKHR presentTelemetryHostDomain() {
+#if defined(_WIN32) && !defined(__WINE__)
+      return VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_KHR;
+#else
+      return VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR;
+#endif
+    }
+
+
+    bool applyPresentTelemetryCalibration(
+            uint64_t                 hostTimeNs,
+            uint64_t                 localCalibration,
+            uint64_t                 localTime,
+            uint64_t*                timeNs) {
+      if (localTime >= localCalibration) {
+        uint64_t delta = localTime - localCalibration;
+
+        if (delta > std::numeric_limits<uint64_t>::max() - hostTimeNs)
+          return false;
+
+        *timeNs = hostTimeNs + delta;
+      } else {
+        uint64_t delta = localCalibration - localTime;
+
+        if (delta > hostTimeNs)
+          return false;
+
+        *timeNs = hostTimeNs - delta;
+      }
+
+      return true;
+    }
+
+  }
 
   const std::array<std::pair<VkColorSpaceKHR, VkColorSpaceKHR>, 2> Presenter::s_colorSpaceFallbacks = {{
     { VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT, VK_COLOR_SPACE_HDR10_ST2084_EXT },
@@ -177,6 +238,12 @@ namespace dxvk {
           uint32_t                rectCount,
     const VkRectLayerKHR*         rects) {
     PresenterSync& currSync = m_semaphores.at(m_frameIndex);
+    bool collectPresentTelemetry = frameId
+      && m_presentTelemetryEnabled.load(std::memory_order_relaxed)
+      && m_presentTelemetrySupported;
+
+    if (collectPresentTelemetry)
+      pollPresentTelemetry();
 
     VkPresentIdKHR presentId = { VK_STRUCTURE_TYPE_PRESENT_ID_KHR };
     presentId.swapchainCount = 1;
@@ -185,6 +252,21 @@ namespace dxvk {
     VkPresentId2KHR presentId2 = { VK_STRUCTURE_TYPE_PRESENT_ID_2_KHR };
     presentId2.swapchainCount = 1;
     presentId2.pPresentIds  = &frameId;
+
+    VkPresentTimingInfoEXT presentTiming;
+    VkPresentTimingsInfoEXT presentTimings;
+
+    if (collectPresentTelemetry) {
+      presentTiming = { VK_STRUCTURE_TYPE_PRESENT_TIMING_INFO_EXT };
+      presentTiming.timeDomainId = m_presentTelemetryTimeDomainId;
+      presentTiming.presentStageQueries = VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT |
+        m_presentTelemetryStage;
+      presentTiming.targetTimeDomainPresentStage = m_presentTelemetryStage;
+
+      presentTimings = { VK_STRUCTURE_TYPE_PRESENT_TIMINGS_INFO_EXT };
+      presentTimings.swapchainCount = 1;
+      presentTimings.pTimingInfos = &presentTiming;
+    }
 
     VkSwapchainPresentFenceInfoKHR fenceInfo = { VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR };
     fenceInfo.swapchainCount = 1;
@@ -216,6 +298,9 @@ namespace dxvk {
         presentId.pNext = const_cast<void*>(std::exchange(info.pNext, &presentId));
     }
 
+    if (collectPresentTelemetry)
+      presentTimings.pNext = const_cast<void*>(std::exchange(info.pNext, &presentTimings));
+
     if (m_hasSwapchainMaintenance1) {
       modeInfo.pNext = const_cast<void*>(std::exchange(info.pNext, &modeInfo));
       fenceInfo.pNext = const_cast<void*>(std::exchange(info.pNext, &fenceInfo));
@@ -224,8 +309,28 @@ namespace dxvk {
     if (m_hasIncrementalPresent && !m_presentRepaint && m_acquireStatus == VK_SUCCESS && rectCount)
       regionInfo.pNext = const_cast<void*>(std::exchange(info.pNext, &regionInfo));
 
+    PresentQueueTime* queueTime = nullptr;
+
+    if (collectPresentTelemetry) {
+      queueTime = &m_presentQueueTimes[frameId % m_presentQueueTimes.size()];
+
+      std::lock_guard telemetryLock(m_presentTelemetryMutex);
+
+      if (m_presentTelemetryEnabled.load(std::memory_order_relaxed)) {
+        queueTime->presentId = frameId;
+        queueTime->timeNs = presentTelemetryNowNs();
+      } else {
+        queueTime = nullptr;
+      }
+    }
+
     VkResult status = m_vkd->vkQueuePresentKHR(
       m_device->queues().graphics.queueHandle, &info);
+
+    if (status < 0 && queueTime) {
+      std::lock_guard telemetryLock(m_presentTelemetryMutex);
+      *queueTime = { };
+    }
 
     // Maintain valid state if presentation succeeded, even if we want to
     // recreate the swapchain. Spec says that 'queue' operations, i.e. the
@@ -477,6 +582,36 @@ namespace dxvk {
   }
 
 
+  void Presenter::setPresentTelemetryEnabled(bool enable) {
+    std::lock_guard lock(m_surfaceMutex);
+
+    if (m_presentTelemetryEnabled.load(std::memory_order_relaxed) == enable)
+      return;
+
+    m_presentTelemetryEnabled.store(enable, std::memory_order_relaxed);
+
+    if (enable && m_device->features().extPresentTiming.presentTiming)
+      m_dirtySwapchain |= m_swapchain != VK_NULL_HANDLE;
+
+    {
+      std::lock_guard telemetryLock(m_presentTelemetryMutex);
+      m_presentQueueTimes = { };
+      m_previousPresentCompleteId = 0u;
+      m_previousPresentCompleteNs = 0u;
+      m_presentTelemetry = { };
+      m_presentTelemetryFieldIds = { };
+    }
+  }
+
+
+  bool Presenter::getPresentTelemetry(
+          PresenterTelemetry& telemetry) {
+    std::lock_guard lock(m_presentTelemetryMutex);
+    telemetry = m_presentTelemetry;
+    return telemetry.validFields != 0u;
+  }
+
+
   void Presenter::setSyncInterval(uint32_t syncInterval) {
     std::lock_guard lock(m_surfaceMutex);
 
@@ -588,8 +723,13 @@ namespace dxvk {
     // just query everything again.
     VkSurfaceCapabilitiesPresentWait2KHR presentWait2Caps = { VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_WAIT_2_KHR };
     VkSurfaceCapabilitiesPresentId2KHR presentId2Caps = { VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_PRESENT_ID_2_KHR };
+    VkPresentTimingSurfaceCapabilitiesEXT presentTimingCaps = { VK_STRUCTURE_TYPE_PRESENT_TIMING_SURFACE_CAPABILITIES_EXT };
 
     VkSurfaceCapabilities2KHR caps = { VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR };
+
+    if (m_presentTelemetryEnabled.load(std::memory_order_relaxed)
+        && m_device->features().extPresentTiming.presentTiming)
+      presentTimingCaps.pNext = std::exchange(caps.pNext, &presentTimingCaps);
 
     if (m_device->features().khrPresentId2.presentId2) {
       presentId2Caps.pNext = std::exchange(caps.pNext, &presentId2Caps);
@@ -615,6 +755,25 @@ namespace dxvk {
       Logger::err(str::format("Presenter: Failed to get surface capabilities: ", status));
       return status;
     }
+
+    VkPresentStageFlagsEXT completionStages =
+      VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT |
+      VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT |
+      VK_PRESENT_STAGE_REQUEST_DEQUEUED_BIT_EXT;
+
+    m_presentTelemetrySupported = presentTimingCaps.presentTimingSupported
+      && presentId2Caps.presentId2Supported
+      && (presentTimingCaps.presentStageQueries & VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT)
+      && (presentTimingCaps.presentStageQueries & completionStages);
+
+    if (presentTimingCaps.presentStageQueries & VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT)
+      m_presentTelemetryStage = VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT;
+    else if (presentTimingCaps.presentStageQueries & VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT)
+      m_presentTelemetryStage = VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT;
+    else if (presentTimingCaps.presentStageQueries & VK_PRESENT_STAGE_REQUEST_DEQUEUED_BIT_EXT)
+      m_presentTelemetryStage = VK_PRESENT_STAGE_REQUEST_DEQUEUED_BIT_EXT;
+    else
+      m_presentTelemetryStage = 0u;
 
     // Select image extent based on current surface capabilities, and return
     // immediately if we cannot create an actual swap chain.
@@ -766,6 +925,9 @@ namespace dxvk {
     if (presentWait2Caps.presentWait2Supported)
       swapInfo.flags |= VK_SWAPCHAIN_CREATE_PRESENT_WAIT_2_BIT_KHR;
 
+    if (m_presentTelemetrySupported)
+      swapInfo.flags |= VK_SWAPCHAIN_CREATE_PRESENT_TIMING_BIT_EXT;
+
     if (m_device->features().extFullScreenExclusive)
       fullScreenInfo.pNext = const_cast<void*>(std::exchange(swapInfo.pNext, &fullScreenInfo));
 
@@ -787,6 +949,9 @@ namespace dxvk {
       Logger::err(str::format("Presenter: Failed to create Vulkan swapchain: ", status));
       return status;
     }
+
+    if (m_presentTelemetrySupported && !initPresentTelemetry())
+      m_presentTelemetrySupported = false;
     
     // Import actual swap chain images
     std::vector<VkImage> images;
@@ -1219,6 +1384,255 @@ namespace dxvk {
   }
 
 
+  bool Presenter::initPresentTelemetry() {
+    if (!updatePresentTelemetryTimeDomain())
+      return false;
+
+    // Keep one CPU queue timestamp for every outstanding timing result.
+    VkResult vr = m_vkd->vkSetSwapchainPresentTimingQueueSizeEXT(
+      m_vkd->device(), m_swapchain, uint32_t(m_presentQueueTimes.size()));
+    return vr == VK_SUCCESS;
+  }
+
+
+  bool Presenter::updatePresentTelemetryTimeDomain() {
+    std::array<VkTimeDomainKHR, 16> timeDomains = { };
+    std::array<uint64_t, 16> timeDomainIds = { };
+
+    VkSwapchainTimeDomainPropertiesEXT properties = {
+      VK_STRUCTURE_TYPE_SWAPCHAIN_TIME_DOMAIN_PROPERTIES_EXT };
+    properties.timeDomainCount = timeDomains.size();
+    properties.pTimeDomains = timeDomains.data();
+    properties.pTimeDomainIds = timeDomainIds.data();
+
+    uint64_t counter = 0u;
+    VkResult vr = m_vkd->vkGetSwapchainTimeDomainPropertiesEXT(
+      m_vkd->device(), m_swapchain, &properties, &counter);
+
+    if (vr != VK_SUCCESS && vr != VK_INCOMPLETE)
+      return false;
+
+    VkTimeDomainKHR hostDomain = presentTelemetryHostDomain();
+    int32_t selected = -1;
+
+    for (uint32_t i = 0; i < properties.timeDomainCount; i++) {
+      if (timeDomains[i] == hostDomain) {
+        selected = int32_t(i);
+        break;
+      }
+
+      if (timeDomains[i] == VK_TIME_DOMAIN_SWAPCHAIN_LOCAL_EXT)
+        selected = int32_t(i);
+      else if (selected < 0 && timeDomains[i] == VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT)
+        selected = int32_t(i);
+    }
+
+    if (selected < 0)
+      return false;
+
+    m_presentTelemetryTimeDomainId = timeDomainIds[selected];
+    m_presentTelemetryTimeDomainsCounter = counter;
+    return true;
+  }
+
+
+  bool Presenter::calibratePresentTelemetry(
+          VkTimeDomainKHR          timeDomain,
+          uint64_t                 timeDomainId,
+          uint64_t                 queueTime,
+          uint64_t                 completeTime,
+          uint64_t*                queueTimeNs,
+          uint64_t*                completeTimeNs) {
+    VkTimeDomainKHR hostDomain = presentTelemetryHostDomain();
+
+    if (timeDomain == hostDomain) {
+      if (queueTime)
+        *queueTimeNs = presentTelemetryCounterToNs(queueTime);
+      if (completeTime)
+        *completeTimeNs = presentTelemetryCounterToNs(completeTime);
+      return true;
+    }
+
+    std::array<VkCalibratedTimestampInfoKHR, 3> infos = { };
+    std::array<VkSwapchainCalibratedTimestampInfoEXT, 2> swapchainInfos = { };
+    std::array<uint64_t, 3> timestamps = { };
+    uint32_t count = timeDomain == VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT ? 3u : 2u;
+
+    for (uint32_t i = 0; i < count; i++)
+      infos[i].sType = VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR;
+
+    infos[0].timeDomain = hostDomain;
+    infos[1].timeDomain = timeDomain;
+
+    if (timeDomain == VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT) {
+      infos[2].timeDomain = timeDomain;
+
+      swapchainInfos[0].sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CALIBRATED_TIMESTAMP_INFO_EXT;
+      swapchainInfos[0].swapchain = m_swapchain;
+      swapchainInfos[0].presentStage = VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT;
+      swapchainInfos[0].timeDomainId = timeDomainId;
+      infos[1].pNext = &swapchainInfos[0];
+
+      swapchainInfos[1].sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CALIBRATED_TIMESTAMP_INFO_EXT;
+      swapchainInfos[1].swapchain = m_swapchain;
+      swapchainInfos[1].presentStage = m_presentTelemetryStage;
+      swapchainInfos[1].timeDomainId = timeDomainId;
+      infos[2].pNext = &swapchainInfos[1];
+    } else if (timeDomain == VK_TIME_DOMAIN_SWAPCHAIN_LOCAL_EXT) {
+      swapchainInfos[0].sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CALIBRATED_TIMESTAMP_INFO_EXT;
+      swapchainInfos[0].swapchain = m_swapchain;
+      swapchainInfos[0].timeDomainId = timeDomainId;
+      infos[1].pNext = &swapchainInfos[0];
+    }
+
+    uint64_t maxDeviation = 0u;
+    VkResult vr = m_vkd->vkGetCalibratedTimestampsKHR(
+      m_vkd->device(), count, infos.data(), timestamps.data(), &maxDeviation);
+
+    if (vr != VK_SUCCESS || !timestamps[0] || !timestamps[1] ||
+        (count == 3u && !timestamps[2]))
+      return false;
+
+    uint64_t hostTimeNs = presentTelemetryCounterToNs(timestamps[0]);
+
+    if (queueTime && !applyPresentTelemetryCalibration(
+        hostTimeNs, timestamps[1], queueTime, queueTimeNs))
+      return false;
+
+    uint64_t completeCalibration = count == 3u ? timestamps[2] : timestamps[1];
+    return !completeTime || applyPresentTelemetryCalibration(
+      hostTimeNs, completeCalibration, completeTime, completeTimeNs);
+  }
+
+
+  void Presenter::pollPresentTelemetry() {
+    constexpr uint32_t MaxTimings = 16u;
+    std::array<VkPastPresentationTimingEXT, MaxTimings> timings = { };
+    std::array<std::array<VkPresentStageTimeEXT, 2>, MaxTimings> stages = { };
+
+    VkPastPresentationTimingInfoEXT info = {
+      VK_STRUCTURE_TYPE_PAST_PRESENTATION_TIMING_INFO_EXT };
+    info.flags = VK_PAST_PRESENTATION_TIMING_ALLOW_OUT_OF_ORDER_RESULTS_BIT_EXT;
+    info.swapchain = m_swapchain;
+
+    VkPastPresentationTimingPropertiesEXT properties = {
+      VK_STRUCTURE_TYPE_PAST_PRESENTATION_TIMING_PROPERTIES_EXT };
+    properties.presentationTimingCount = timings.size();
+    properties.pPresentationTimings = timings.data();
+
+    for (uint32_t i = 0; i < timings.size(); i++) {
+      timings[i].sType = VK_STRUCTURE_TYPE_PAST_PRESENTATION_TIMING_EXT;
+      timings[i].presentStageCount = stages[i].size();
+      timings[i].pPresentStages = stages[i].data();
+    }
+
+    VkResult vr = m_vkd->vkGetPastPresentationTimingEXT(
+      m_vkd->device(), &info, &properties);
+
+    if (vr != VK_SUCCESS && vr != VK_INCOMPLETE)
+      return;
+
+    if (properties.timeDomainsCounter != m_presentTelemetryTimeDomainsCounter &&
+        !updatePresentTelemetryTimeDomain()) {
+      m_presentTelemetrySupported = false;
+      return;
+    }
+
+    for (uint32_t i = 0; i < properties.presentationTimingCount; i++) {
+      if (!timings[i].reportComplete || !timings[i].presentId)
+        continue;
+
+      uint64_t queueTime = 0u;
+      uint64_t completeTime = 0u;
+
+      for (uint32_t j = 0; j < timings[i].presentStageCount; j++) {
+        if (stages[i][j].stage == VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT)
+          queueTime = stages[i][j].time;
+        else if (stages[i][j].stage == m_presentTelemetryStage)
+          completeTime = stages[i][j].time;
+      }
+
+      if (!queueTime && !completeTime)
+        continue;
+
+      uint64_t queueTimeNs = 0u;
+      uint64_t completeTimeNs = 0u;
+
+      if (!calibratePresentTelemetry(timings[i].timeDomain,
+          timings[i].timeDomainId, queueTime, completeTime,
+          &queueTimeNs, &completeTimeNs))
+        continue;
+
+      PresenterTelemetry telemetry = { };
+      telemetry.presentId = timings[i].presentId;
+      telemetry.completionStage = m_presentTelemetryStage;
+
+      std::lock_guard telemetryLock(m_presentTelemetryMutex);
+
+      if (!m_presentTelemetryEnabled.load(std::memory_order_relaxed))
+        return;
+
+      const PresentQueueTime& present =
+        m_presentQueueTimes[timings[i].presentId % m_presentQueueTimes.size()];
+
+      if (present.presentId == timings[i].presentId) {
+        if (queueTimeNs >= present.timeNs) {
+          telemetry.validFields |= PresenterTelemetryQueue;
+          telemetry.queueDurationNs = queueTimeNs - present.timeNs;
+        }
+
+        if (completeTimeNs >= present.timeNs) {
+          telemetry.validFields |= PresenterTelemetryPresent;
+          telemetry.presentDurationNs = completeTimeNs - present.timeNs;
+        }
+      }
+
+      if (completeTimeNs >= queueTimeNs && queueTimeNs) {
+        telemetry.validFields |= PresenterTelemetryDisplay;
+        telemetry.displayDurationNs = completeTimeNs - queueTimeNs;
+      }
+
+      // This measured visible-to-visible interval naturally reflects VRR cadence.
+      if (m_presentTelemetryStage == VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT &&
+          completeTimeNs && timings[i].presentId > m_previousPresentCompleteId) {
+        if (m_previousPresentCompleteNs && completeTimeNs > m_previousPresentCompleteNs) {
+          telemetry.validFields |= PresenterTelemetryInterval;
+          telemetry.displayIntervalNs = completeTimeNs - m_previousPresentCompleteNs;
+        }
+
+        m_previousPresentCompleteId = timings[i].presentId;
+        m_previousPresentCompleteNs = completeTimeNs;
+      }
+
+      auto updateField = [&] (uint32_t index, uint32_t valid,
+                              uint64_t value, uint64_t PresenterTelemetry::*member) {
+        if ((telemetry.validFields & valid) &&
+            telemetry.presentId >= m_presentTelemetryFieldIds[index]) {
+          m_presentTelemetry.validFields |= valid;
+          m_presentTelemetry.*member = value;
+          m_presentTelemetryFieldIds[index] = telemetry.presentId;
+        }
+      };
+
+      updateField(0u, PresenterTelemetryQueue,
+        telemetry.queueDurationNs, &PresenterTelemetry::queueDurationNs);
+      updateField(1u, PresenterTelemetryDisplay,
+        telemetry.displayDurationNs, &PresenterTelemetry::displayDurationNs);
+      updateField(2u, PresenterTelemetryPresent,
+        telemetry.presentDurationNs, &PresenterTelemetry::presentDurationNs);
+      updateField(3u, PresenterTelemetryInterval,
+        telemetry.displayIntervalNs, &PresenterTelemetry::displayIntervalNs);
+
+      m_presentTelemetry.presentId = std::max(
+        m_presentTelemetry.presentId, telemetry.presentId);
+
+      if (telemetry.validFields & (PresenterTelemetryDisplay |
+          PresenterTelemetryPresent | PresenterTelemetryInterval))
+        m_presentTelemetry.completionStage = telemetry.completionStage;
+    }
+  }
+
+
   void Presenter::destroySwapchain() {
     // Without present fence support, waiting for the queue or device to go idle
     // is the only way to properly synchronize swapchain teardown. Care must be
@@ -1265,6 +1679,19 @@ namespace dxvk {
     m_hasPresentId = false;
     m_hasPresentWait = false;
     m_hasIncrementalPresent = false;
+
+    m_presentTelemetrySupported = false;
+    m_presentTelemetryStage = 0u;
+    m_presentTelemetryTimeDomainId = 0u;
+    m_presentTelemetryTimeDomainsCounter = 0u;
+    {
+      std::lock_guard telemetryLock(m_presentTelemetryMutex);
+      m_presentQueueTimes = { };
+      m_previousPresentCompleteId = 0u;
+      m_previousPresentCompleteNs = 0u;
+      m_presentTelemetry = { };
+      m_presentTelemetryFieldIds = { };
+    }
   }
 
 

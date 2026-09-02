@@ -672,7 +672,7 @@ namespace dxvk {
 
   void D3D11SwapChain::CreateBlitter() {
     Com<D3D11ReflexDevice> reflex = GetReflexDevice();
-    Rc<hud::Hud> hud = hud::Hud::createHud(m_device, reflex.ptr());
+    Rc<hud::Hud> hud = hud::Hud::createHud(m_device, reflex.ptr(), m_presenter);
 
     if (hud) {
       hud->addItem<hud::HudClientApiItem>("api", 1, GetApiName());

@@ -2,6 +2,7 @@
 #include <iomanip>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include <type_traits>
 
 #include "dxvk_device_info.h"
@@ -9,6 +10,35 @@
 #include "dxvk_limits.h"
 
 namespace dxvk {
+
+  static bool hudRequestsPresentTelemetry(const DxvkInstance& instance) {
+    std::string config = env::getEnvVar("DXVK_HUD");
+
+    if (config.empty())
+      config = instance.options().hud;
+
+    for (size_t pos = 0; pos < config.size(); ) {
+      size_t end = config.find(',', pos);
+
+      if (end == std::string::npos)
+        end = config.size();
+
+      size_t mid = config.find('=', pos);
+      size_t length = mid != std::string::npos && mid < end
+        ? mid - pos
+        : end - pos;
+      std::string_view token(config.data() + pos, length);
+
+      if (token == "full" || token == "present_latency" ||
+          token == "latency.queue" || token == "latency.display" ||
+          token == "latency.present" || token == "latency.interval")
+        return true;
+
+      pos = end + 1;
+    }
+
+    return false;
+  }
 
   #define CORE_VERSIONS                            \
     HANDLE_CORE(vk11);                             \
@@ -36,6 +66,7 @@ namespace dxvk {
     HANDLE_EXT(extMultiDraw);                      \
     HANDLE_EXT(extNonSeamlessCubeMap);             \
     HANDLE_EXT(extPageableDeviceLocalMemory);      \
+    HANDLE_EXT(extPresentTiming);                  \
     HANDLE_EXT(extRobustness2);                    \
     HANDLE_EXT(extSampleLocations);                \
     HANDLE_EXT(extShaderModuleIdentifier);         \
@@ -49,6 +80,7 @@ namespace dxvk {
     HANDLE_EXT(khrExternalMemoryWin32);            \
     HANDLE_EXT(khrExternalSemaphoreWin32);         \
     HANDLE_EXT(khrIncrementalPresent);             \
+    HANDLE_EXT(khrCalibratedTimestamps);           \
     HANDLE_EXT(khrLoadStoreOpNone);                \
     HANDLE_EXT(khrMaintenance5);                   \
     HANDLE_EXT(khrMaintenance6);                   \
@@ -601,12 +633,26 @@ namespace dxvk {
     if (!instance.options().enableNvRawAccessChains)
       m_featuresSupported.nvRawAccessChains.shaderRawAccessChains = VK_FALSE;
 
-    // Ensure we only enable one of present_id or present_id_2. Prefer the
-    // older versions of the present_id/wait extensions since the newer ones
-    // cause issues with external layers and apparently some Wayland setups
-    // on Mesa for unknown reasons.
-    if (m_featuresSupported.khrPresentId.presentId)
-      m_featuresSupported.khrPresentId2.presentId2 = VK_FALSE;
+    bool enablePresentTelemetry = hudRequestsPresentTelemetry(instance)
+      && m_featuresSupported.extPresentTiming.presentTiming
+      && m_featuresSupported.khrCalibratedTimestamps
+      && m_featuresSupported.khrPresentId2.presentId2
+      && m_featuresSupported.khrPresentWait2.presentWait2;
+
+    if (enablePresentTelemetry) {
+      // Present timing requires present ID 2. Keep the usual present ID 1
+      // path unchanged when presentation telemetry is not requested.
+      m_featuresSupported.khrPresentId.presentId = VK_FALSE;
+    } else {
+      m_featuresSupported.extPresentTiming.presentTiming = VK_FALSE;
+      m_featuresSupported.khrCalibratedTimestamps = VK_FALSE;
+
+      // Ensure we only enable one of present ID 1 or present ID 2. Prefer the
+      // older versions since the newer ones cause issues with external layers
+      // and some Wayland setups on Mesa.
+      if (m_featuresSupported.khrPresentId.presentId)
+        m_featuresSupported.khrPresentId2.presentId2 = VK_FALSE;
+    }
 
     // Sanitize features with other feature dependencies
     if (!m_featuresSupported.khrPresentId2.presentId2)
@@ -984,6 +1030,9 @@ namespace dxvk {
       /* Enables more dynamic driver-side memory management */
       ENABLE_EXT_FEATURE(extPageableDeviceLocalMemory, pageableDeviceLocalMemory, false),
 
+      /* Presentation timing used by optional HUD telemetry */
+      ENABLE_EXT_FEATURE(extPresentTiming, presentTiming, false),
+
       /* Robustness, all features effectively required for correctness */
       ENABLE_EXT_FEATURE(extRobustness2, robustBufferAccess2, true),
       ENABLE_EXT_FEATURE(extRobustness2, robustImageAccess2, false),
@@ -1026,6 +1075,9 @@ namespace dxvk {
 
       /* Dirty rects for presentation */
       ENABLE_EXT(khrIncrementalPresent, false),
+
+      /* Calibrates optional presentation telemetry timestamps */
+      ENABLE_EXT(khrCalibratedTimestamps, false),
 
       /* LOAD_OP_NONE for certain tiler optimizations. Core feature
        * in Vulkan 1.4, so probably supported by everything we need. */
