@@ -84,9 +84,9 @@ namespace dxvk::hud {
       { "cpu.clock", "CPU clock:" },
     }};
 
-    constexpr uint32_t HudReflexLabelColor = 0xff60ff60u;
+    constexpr uint32_t HudReflexLabelColor = 0xff184800u;
     constexpr uint32_t HudPresentTelemetryLabelColor = 0xff40ffffu;
-    constexpr uint32_t HudGpuTelemetryLabelColor = 0xffffff40u;
+    constexpr uint32_t HudGpuTelemetryLabelColor = 0xff0060d0u;
     constexpr uint32_t HudCpuTelemetryLabelColor = 0xffff8040u;
     constexpr uint32_t HudTelemetryValueColor = 0xffffffffu;
 
@@ -689,19 +689,24 @@ namespace dxvk::hud {
     size_t end = m_metric == HudReflexMetric::Count
       ? HudReflexMetrics.size()
       : first + 1;
-    uint32_t valueOffset = 0;
+    uint32_t spaceWidth = renderer.textWidth(16, " ");
+    uint32_t valueOffset = spaceWidth;
 
-    for (size_t i = first; i < end; i++)
-      valueOffset = std::max(valueOffset,
-        renderer.textWidth(16, HudReflexMetrics[i].label));
-
-    valueOffset += renderer.textWidth(16, " ");
+    if (!options.horizontal) {
+      for (size_t i = first; i < end; i++)
+        valueOffset = std::max(valueOffset,
+          renderer.textWidth(16, HudReflexMetrics[i].label) + spaceWidth);
+    }
 
     for (size_t i = first; i < end; i++) {
+      uint32_t rowValueOffset = options.horizontal
+        ? renderer.textWidth(16, HudReflexMetrics[i].label) + spaceWidth
+        : valueOffset;
+
       position.y += i == first ? 16 : 20;
       renderer.drawText(16, position, HudReflexLabelColor,
         HudReflexMetrics[i].label);
-      renderer.drawText(16, { position.x + int32_t(valueOffset), position.y },
+      renderer.drawText(16, { position.x + int32_t(rowValueOffset), position.y },
         HudTelemetryValueColor, m_data->value(HudReflexMetric(i)));
     }
 
@@ -814,19 +819,24 @@ namespace dxvk::hud {
     size_t end = m_metric == HudPresentTelemetryMetric::Count
       ? HudPresentTelemetryMetrics.size()
       : first + 1;
-    uint32_t valueOffset = 0;
+    uint32_t spaceWidth = renderer.textWidth(16, " ");
+    uint32_t valueOffset = spaceWidth;
 
-    for (size_t i = first; i < end; i++)
-      valueOffset = std::max(valueOffset,
-        renderer.textWidth(16, HudPresentTelemetryMetrics[i].label));
-
-    valueOffset += renderer.textWidth(16, " ");
+    if (!options.horizontal) {
+      for (size_t i = first; i < end; i++)
+        valueOffset = std::max(valueOffset,
+          renderer.textWidth(16, HudPresentTelemetryMetrics[i].label) + spaceWidth);
+    }
 
     for (size_t i = first; i < end; i++) {
+      uint32_t rowValueOffset = options.horizontal
+        ? renderer.textWidth(16, HudPresentTelemetryMetrics[i].label) + spaceWidth
+        : valueOffset;
+
       position.y += i == first ? 16 : 20;
       renderer.drawText(16, position, HudPresentTelemetryLabelColor,
         HudPresentTelemetryMetrics[i].label);
-      renderer.drawText(16, { position.x + int32_t(valueOffset), position.y },
+      renderer.drawText(16, { position.x + int32_t(rowValueOffset), position.y },
         HudTelemetryValueColor, m_data->value(HudPresentTelemetryMetric(i)));
     }
 
@@ -1221,18 +1231,23 @@ namespace dxvk::hud {
     size_t end = m_metric == m_metricCount
       ? m_metricCount
       : first + 1;
-    uint32_t valueOffset = 0;
+    uint32_t spaceWidth = renderer.textWidth(16, " ");
+    uint32_t valueOffset = spaceWidth;
 
-    for (size_t i = first; i < end; i++)
-      valueOffset = std::max(valueOffset,
-        renderer.textWidth(16, m_metrics[i].label));
-
-    valueOffset += renderer.textWidth(16, " ");
+    if (!options.horizontal) {
+      for (size_t i = first; i < end; i++)
+        valueOffset = std::max(valueOffset,
+          renderer.textWidth(16, m_metrics[i].label) + spaceWidth);
+    }
 
     for (size_t i = first; i < end; i++) {
+      uint32_t rowValueOffset = options.horizontal
+        ? renderer.textWidth(16, m_metrics[i].label) + spaceWidth
+        : valueOffset;
+
       position.y += 20;
       renderer.drawText(16, position, m_labelColor, m_metrics[i].label);
-      renderer.drawText(16, { position.x + int32_t(valueOffset), position.y },
+      renderer.drawText(16, { position.x + int32_t(rowValueOffset), position.y },
         HudTelemetryValueColor, m_data->value(i));
     }
 
@@ -1403,7 +1418,7 @@ namespace dxvk::hud {
           HudPos              position) {
     position.y += 16;
 
-    renderer.drawText(16, position, 0xff4040ffu, "FPS:");
+    renderer.drawText(16, position, 0xff2020ffu, "FPS:");
     renderer.drawText(16, { position.x + 60, position.y },
       0xffffffffu, m_frameRate);
 
@@ -1533,12 +1548,12 @@ namespace dxvk::hud {
     int32_t valueOffset = int32_t(renderer.textWidth(16, "0.1% low: "));
 
     position.y += 16;
-    renderer.drawText(16, position, 0xff4040ffu, "1% low:");
+    renderer.drawText(16, position, 0xff2020ffu, "1% low:");
     renderer.drawText(16, { position.x + valueOffset, position.y },
       0xffffffffu, m_onePercent);
 
     position.y += 20;
-    renderer.drawText(16, position, 0xff4040ffu, "0.1% low:");
+    renderer.drawText(16, position, 0xff2020ffu, "0.1% low:");
     renderer.drawText(16, { position.x + valueOffset, position.y },
       0xffffffffu, m_pointOnePercent);
 
