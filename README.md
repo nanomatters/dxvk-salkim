@@ -71,6 +71,11 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `reflex.camera`: Shows the camera construction marker.
 - `reflex.copy`: Shows cross adapter copy time.
 - `reflex.ai`: Shows frame generation time.
+- `present_latency`: Shows all available presentation pipeline timings.
+- `latency.queue`: Shows the time from `vkQueuePresentKHR` to the end of its queue operations.
+- `latency.display`: Shows the time from queue operations ending to PresentComplete.
+- `latency.present`: Shows the time from `vkQueuePresentKHR` to PresentComplete.
+- `latency.interval`: Shows the interval between consecutive first pixel visible timestamps.
 - `frametimes`: Shows a frame time graph.
 - `submissions`: Shows the number of command buffers submitted per frame.
 - `drawcalls`: Shows the number of draw calls and render passes per frame.
@@ -96,6 +101,9 @@ For example, `DXVK_HUD=devinfo,fps,newline,fps_lows,horizontal` places
 device information and FPS on the first row and low frame rates on the second.
 HUD elements are displayed in the order in which they are listed.
 Reflex marker timestamps are displayed relative to the simulation start marker.
+Presentation pipeline timings require `VK_EXT_present_timing`. PresentComplete
+uses first pixel visible when available, then first pixel out or request dequeued.
+The displayed frame interval is reported only when first pixel visible is available.
 
 Additionally, `DXVK_HUD=1` has the same effect as `DXVK_HUD=devinfo,fps`, and `DXVK_HUD=full` enables all available HUD elements.
 
