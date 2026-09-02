@@ -24,16 +24,21 @@ namespace dxvk {
       return nullptr;
 
     std::string deviceName = "D3D12 device";
+    Rc<DxvkAdapter> dxvkAdapter;
 
     if (adapter) {
       DXGI_ADAPTER_DESC desc = { };
+      Com<IDXGIDXVKAdapter> privateAdapter;
 
       if (SUCCEEDED(adapter->GetDesc(&desc)))
         deviceName = str::fromws(desc.Description);
+      if (SUCCEEDED(adapter->QueryInterface(__uuidof(IDXGIDXVKAdapter),
+            reinterpret_cast<void**>(&privateAdapter))))
+        dxvkAdapter = privateAdapter->GetDXVKAdapter();
     }
 
     auto result = std::unique_ptr<DxgiHud>(
-      new DxgiHud(std::move(configString), std::move(deviceName),
+      new DxgiHud(std::move(configString), std::move(deviceName), dxvkAdapter,
         lowLatencyDevice, presenter, fpsLowsWindow));
 
     if (result->m_hudItems.empty())
@@ -47,6 +52,7 @@ namespace dxvk {
   DxgiHud::DxgiHud(
           std::string             config,
           std::string             deviceName,
+    const Rc<DxvkAdapter>&         adapter,
           ID3DLowLatencyDevice*   lowLatencyDevice,
           IDXGIVkSwapChain*       presenter,
           int32_t                 fpsLowsWindow)
@@ -55,6 +61,7 @@ namespace dxvk {
     m_hudItems.add<hud::HudDeviceInfoItem>("devinfo", -1,
       std::move(deviceName), std::string(), std::string());
     m_hudItems.addSystemInfoItems();
+    m_hudItems.addGpuTelemetryItems(adapter);
     m_hudItems.add<hud::HudFpsItem>("fps", -1);
     m_hudItems.add<hud::HudFpsLowItem>("fps_lows", -1,
       m_hudItems.fpsLowsWindowNs());
