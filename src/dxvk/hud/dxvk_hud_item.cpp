@@ -1,6 +1,8 @@
 #include "dxvk_hud_item.h"
 #include "dxvk_hud_info.h"
 
+#include "../dxvk_presenter.h"
+
 #include "../../dxgi/dxgi_interfaces.h"
 
 #include <hud_chunk_frag_background.h>
@@ -46,9 +48,37 @@ namespace dxvk::hud {
       { "reflex.ai",       "AI frame:" },
     }};
 
+    struct HudPresentTelemetryMetricInfo {
+      const char* option;
+      const char* label;
+    };
+
+    constexpr std::array<HudPresentTelemetryMetricInfo,
+      size_t(HudPresentTelemetryMetric::Count)> HudPresentTelemetryMetrics = {{
+      { "latency.queue",    "Queue operations:" },
+      { "latency.display",  "Display queue:" },
+      { "latency.present",  "Present latency:" },
+      { "latency.interval", "Display interval:" },
+    }};
+
+    constexpr uint32_t HudReflexLabelColor = 0xff60ff60u;
+    constexpr uint32_t HudPresentTelemetryLabelColor = 0xff40ffffu;
+    constexpr uint32_t HudTelemetryValueColor = 0xffffffffu;
+
 
     size_t reflexMetricIndex(HudReflexMetric metric) {
       return size_t(metric);
+    }
+
+
+    size_t presentTelemetryMetricIndex(HudPresentTelemetryMetric metric) {
+      return size_t(metric);
+    }
+
+
+    std::string formatNanoseconds(uint64_t durationNs) {
+      return str::format(durationNs / 1'000'000, ".",
+        std::setfill('0'), std::setw(3), durationNs / 1'000 % 1'000, " ms");
     }
 
 
@@ -398,6 +428,62 @@ namespace dxvk::hud {
   }
 
 
+  template<typename T>
+  static void addPresentTelemetrySource(
+          HudItemSet&             items,
+          T*                      presenter) {
+    if (!presenter)
+      return;
+
+    bool group = items.isEnabled("present_latency");
+    bool enabled = group;
+
+    for (const auto& metric : HudPresentTelemetryMetrics)
+      enabled |= items.isEnabled(metric.option);
+
+    if (!enabled)
+      return;
+
+    Rc<HudPresentTelemetryData> data = new HudPresentTelemetryData(presenter);
+
+    if (group) {
+      items.add<HudPresentTelemetryItem>("present_latency", -1,
+        data, HudPresentTelemetryMetric::Count);
+      return;
+    }
+
+    for (size_t i = 0; i < HudPresentTelemetryMetrics.size(); i++) {
+      items.add<HudPresentTelemetryItem>(HudPresentTelemetryMetrics[i].option, -1,
+        data, HudPresentTelemetryMetric(i));
+    }
+  }
+
+
+  void HudItemSet::addPresentTelemetryItems(
+    const Rc<Presenter>& presenter) {
+    addPresentTelemetrySource(*this, presenter.ptr());
+  }
+
+
+  void HudItemSet::addPresentTelemetryItems(
+          IDXGIVkSwapChainPresentTelemetry* presenter) {
+    addPresentTelemetrySource(*this, presenter);
+  }
+
+
+  bool HudItemSet::presentTelemetryEnabled() const {
+    if (isEnabled("present_latency"))
+      return true;
+
+    for (const auto& metric : HudPresentTelemetryMetrics) {
+      if (isEnabled(metric.option))
+        return true;
+    }
+
+    return false;
+  }
+
+
   HudReflexData::HudReflexData(
           ID3DLowLatencyDevice* lowLatencyDevice)
   : m_lowLatencyDevice(lowLatencyDevice) {
@@ -508,12 +594,139 @@ namespace dxvk::hud {
       valueOffset = std::max(valueOffset,
         renderer.textWidth(16, HudReflexMetrics[i].label));
 
+    valueOffset += renderer.textWidth(16, " ");
+
     for (size_t i = first; i < end; i++) {
       position.y += i == first ? 16 : 20;
-      renderer.drawText(16, position, 0xff60a0ffu,
+      renderer.drawText(16, position, HudReflexLabelColor,
         HudReflexMetrics[i].label);
       renderer.drawText(16, { position.x + int32_t(valueOffset), position.y },
-        0xffffffffu, m_data->value(HudReflexMetric(i)));
+        HudTelemetryValueColor, m_data->value(HudReflexMetric(i)));
+    }
+
+    position.y += 8;
+    return position;
+  }
+
+
+  HudPresentTelemetryData::HudPresentTelemetryData(
+          Presenter* presenter)
+  : m_presenter(presenter) {
+    m_presenter->setPresentTelemetryEnabled(true);
+    m_values.fill("--");
+  }
+
+
+  HudPresentTelemetryData::HudPresentTelemetryData(
+          IDXGIVkSwapChainPresentTelemetry* presenter)
+  : m_dxgiPresenter(presenter) {
+    m_dxgiPresenter->AddRef();
+    m_dxgiPresenter->SetEnabled(TRUE);
+    m_values.fill("--");
+  }
+
+
+  HudPresentTelemetryData::~HudPresentTelemetryData() {
+    if (m_presenter)
+      m_presenter->setPresentTelemetryEnabled(false);
+
+    if (m_dxgiPresenter) {
+      m_dxgiPresenter->SetEnabled(FALSE);
+      m_dxgiPresenter->Release();
+    }
+  }
+
+
+  void HudPresentTelemetryData::update(
+          dxvk::high_resolution_clock::time_point time) {
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+      time - m_lastUpdate).count();
+
+    if (m_lastUpdate.time_since_epoch().count() && elapsed < UpdateInterval)
+      return;
+
+    m_lastUpdate = time;
+    m_values.fill("--");
+
+    DXGI_VK_PRESENT_TELEMETRY data = { };
+    data.StructSize = sizeof(data);
+
+    if (m_presenter) {
+      PresenterTelemetry telemetry = { };
+
+      if (!m_presenter->getPresentTelemetry(telemetry))
+        return;
+
+      data.ValidFields = telemetry.validFields;
+      data.PresentId = telemetry.presentId;
+      data.QueueDurationNs = telemetry.queueDurationNs;
+      data.DisplayDurationNs = telemetry.displayDurationNs;
+      data.PresentDurationNs = telemetry.presentDurationNs;
+      data.DisplayIntervalNs = telemetry.displayIntervalNs;
+      data.CompletionStage = telemetry.completionStage;
+    } else if (FAILED(m_dxgiPresenter->GetData(&data))) {
+      return;
+    }
+
+    if (data.ValidFields & DXGI_VK_PRESENT_TELEMETRY_QUEUE)
+      m_values[presentTelemetryMetricIndex(HudPresentTelemetryMetric::Queue)] =
+        formatNanoseconds(data.QueueDurationNs);
+    if (data.ValidFields & DXGI_VK_PRESENT_TELEMETRY_DISPLAY)
+      m_values[presentTelemetryMetricIndex(HudPresentTelemetryMetric::Display)] =
+        formatNanoseconds(data.DisplayDurationNs);
+    if (data.ValidFields & DXGI_VK_PRESENT_TELEMETRY_PRESENT)
+      m_values[presentTelemetryMetricIndex(HudPresentTelemetryMetric::Present)] =
+        formatNanoseconds(data.PresentDurationNs);
+    if (data.ValidFields & DXGI_VK_PRESENT_TELEMETRY_INTERVAL)
+      m_values[presentTelemetryMetricIndex(HudPresentTelemetryMetric::Interval)] =
+        formatNanoseconds(data.DisplayIntervalNs);
+  }
+
+
+  const std::string& HudPresentTelemetryData::value(
+          HudPresentTelemetryMetric metric) const {
+    return m_values[presentTelemetryMetricIndex(metric)];
+  }
+
+
+  HudPresentTelemetryItem::HudPresentTelemetryItem(
+    const Rc<HudPresentTelemetryData>& data,
+          HudPresentTelemetryMetric   metric)
+  : m_data(data), m_metric(metric) { }
+
+
+  void HudPresentTelemetryItem::update(
+          dxvk::high_resolution_clock::time_point time) {
+    m_data->update(time);
+  }
+
+
+  HudPos HudPresentTelemetryItem::render(
+    const Rc<DxvkCommandList>&ctx,
+    const HudPipelineKey&     key,
+    const HudOptions&         options,
+          HudRenderer&        renderer,
+          HudPos              position) {
+    size_t first = m_metric == HudPresentTelemetryMetric::Count
+      ? 0
+      : presentTelemetryMetricIndex(m_metric);
+    size_t end = m_metric == HudPresentTelemetryMetric::Count
+      ? HudPresentTelemetryMetrics.size()
+      : first + 1;
+    uint32_t valueOffset = 0;
+
+    for (size_t i = first; i < end; i++)
+      valueOffset = std::max(valueOffset,
+        renderer.textWidth(16, HudPresentTelemetryMetrics[i].label));
+
+    valueOffset += renderer.textWidth(16, " ");
+
+    for (size_t i = first; i < end; i++) {
+      position.y += i == first ? 16 : 20;
+      renderer.drawText(16, position, HudPresentTelemetryLabelColor,
+        HudPresentTelemetryMetrics[i].label);
+      renderer.drawText(16, { position.x + int32_t(valueOffset), position.y },
+        HudTelemetryValueColor, m_data->value(HudPresentTelemetryMetric(i)));
     }
 
     position.y += 8;

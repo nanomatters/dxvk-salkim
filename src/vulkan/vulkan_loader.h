@@ -508,6 +508,16 @@ namespace dxvk::vk {
     VULKAN_FN(vkWaitForPresent2KHR);
     #endif
 
+    #ifdef VK_KHR_calibrated_timestamps
+    VULKAN_FN(vkGetCalibratedTimestampsKHR);
+    #endif
+
+    #ifdef VK_EXT_present_timing
+    VULKAN_FN(vkSetSwapchainPresentTimingQueueSizeEXT);
+    VULKAN_FN(vkGetSwapchainTimeDomainPropertiesEXT);
+    VULKAN_FN(vkGetPastPresentationTimingEXT);
+    #endif
+
     #ifdef VK_KHR_win32_keyed_mutex
     // Wine additions to actually use this extension.
     VULKAN_FN(wine_vkAcquireKeyedMutex);
