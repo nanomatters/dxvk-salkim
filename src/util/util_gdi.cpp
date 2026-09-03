@@ -1,7 +1,54 @@
 #include "util_gdi.h"
+#include "thread.h"
 #include "log/log.h"
 
+#include <unordered_set>
+
 namespace dxvk {
+
+  struct WinePresentationSourceProcs {
+    using ActivateProc = BOOL (WINAPI*) (HWND, UINT);
+    using HasProc = BOOL (WINAPI*) (HWND);
+    using RegisterProc = UINT (WINAPI*) (HWND);
+    using UnregisterProc = BOOL (WINAPI*) (HWND, UINT);
+
+    ActivateProc activate = nullptr;
+    HasProc has = nullptr;
+    RegisterProc registerSource = nullptr;
+    UnregisterProc unregisterSource = nullptr;
+
+    explicit operator bool () const {
+      return activate && has && registerSource && unregisterSource;
+    }
+  };
+
+  static const WinePresentationSourceProcs& getWinePresentationSourceProcs() {
+#ifdef _WIN32
+    static const auto procs = [] {
+      WinePresentationSourceProcs result;
+      HMODULE module = ::GetModuleHandleW(L"win32u.dll");
+      if (module) {
+        result.activate = reinterpret_cast<WinePresentationSourceProcs::ActivateProc>(
+          ::GetProcAddress(module, "__wine_activate_window_flip_presenter"));
+        result.has = reinterpret_cast<WinePresentationSourceProcs::HasProc>(
+          ::GetProcAddress(module, "__wine_has_window_flip_presenter"));
+        result.registerSource = reinterpret_cast<WinePresentationSourceProcs::RegisterProc>(
+          ::GetProcAddress(module, "__wine_register_window_flip_presenter"));
+        result.unregisterSource = reinterpret_cast<WinePresentationSourceProcs::UnregisterProc>(
+          ::GetProcAddress(module, "__wine_unregister_window_flip_presenter"));
+      }
+      return result;
+    }();
+    return procs;
+#else
+    static const WinePresentationSourceProcs procs;
+    return procs;
+#endif
+  }
+
+
+  static dxvk::mutex presentationSourceMutex;
+  static std::unordered_set<HWND> presentationSources;
 
 #ifndef _WIN32
   NTSTATUS WINAPI D3DKMTAcquireKeyedMutex(D3DKMT_ACQUIREKEYEDMUTEX *desc) {
@@ -139,4 +186,131 @@ namespace dxvk {
     return func(desc);
   }
 #endif
+
+  WinePresentationSource::WinePresentationSource(
+          WinePresentationSource&& other) noexcept
+  : m_window(other.m_window), m_id(other.m_id),
+    m_registered(other.m_registered), m_active(other.m_active),
+    m_exclusive(other.m_exclusive) {
+    other.m_window = nullptr;
+    other.m_id = 0;
+    other.m_registered = false;
+    other.m_active = false;
+    other.m_exclusive = false;
+  }
+
+
+  WinePresentationSource& WinePresentationSource::operator = (
+          WinePresentationSource&& other) noexcept {
+    if (this != &other) {
+      reset();
+      m_window = other.m_window;
+      m_id = other.m_id;
+      m_registered = other.m_registered;
+      m_active = other.m_active;
+      m_exclusive = other.m_exclusive;
+      other.m_window = nullptr;
+      other.m_id = 0;
+      other.m_registered = false;
+      other.m_active = false;
+      other.m_exclusive = false;
+    }
+
+    return *this;
+  }
+
+
+  WinePresentationSource::~WinePresentationSource() {
+    reset();
+  }
+
+
+  WinePresentationSourceStatus WinePresentationSource::registerFlip(
+          HWND  window) {
+    return registerFlip(window, false);
+  }
+
+
+  WinePresentationSourceStatus WinePresentationSource::registerExclusiveFlip(
+          HWND  window) {
+    return registerFlip(window, true);
+  }
+
+
+  WinePresentationSourceStatus WinePresentationSource::registerFlip(
+          HWND  window,
+          bool  exclusive) {
+    if (m_registered && m_window == window && m_exclusive == exclusive)
+      return WinePresentationSourceStatus::Registered;
+
+    reset();
+
+    if (!window)
+      return WinePresentationSourceStatus::Conflict;
+
+    std::lock_guard lock(presentationSourceMutex);
+
+    if (exclusive && !presentationSources.insert(window).second)
+      return WinePresentationSourceStatus::Conflict;
+
+    const auto& procs = getWinePresentationSourceProcs();
+
+    if (procs && !(m_id = procs.registerSource(window))) {
+      if (exclusive)
+        presentationSources.erase(window);
+      return WinePresentationSourceStatus::Conflict;
+    }
+
+    m_window = window;
+    m_registered = true;
+    m_active = false;
+    m_exclusive = exclusive;
+    return WinePresentationSourceStatus::Registered;
+  }
+
+
+  void WinePresentationSource::reset() {
+    if (!m_registered)
+      return;
+
+    std::lock_guard lock(presentationSourceMutex);
+
+    const auto& procs = getWinePresentationSourceProcs();
+
+    if (m_id && procs)
+      procs.unregisterSource(m_window, m_id);
+
+    if (m_exclusive)
+      presentationSources.erase(m_window);
+
+    m_window = nullptr;
+    m_id = 0;
+    m_registered = false;
+    m_active = false;
+    m_exclusive = false;
+  }
+
+
+  void WinePresentationSource::activate() {
+    if (!m_registered || m_active)
+      return;
+
+    const auto& procs = getWinePresentationSourceProcs();
+
+    if (!m_id || (procs && procs.activate(m_window, m_id)))
+      m_active = true;
+  }
+
+
+  WinePresentationBlitStatus WinePresentationSource::checkBlit(HWND window) {
+    const auto& procs = getWinePresentationSourceProcs();
+
+    if (!procs)
+      return WinePresentationBlitStatus::Unavailable;
+
+    if (procs.has(window))
+      return WinePresentationBlitStatus::Suppressed;
+
+    return WinePresentationBlitStatus::Allowed;
+  }
 }

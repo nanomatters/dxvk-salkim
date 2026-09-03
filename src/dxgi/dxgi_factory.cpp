@@ -550,6 +550,18 @@ namespace dxvk {
       fsDesc.Windowed         = TRUE;
     }
 
+    const bool flipModel = desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
+                        || desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+    WinePresentationSource presentationSource;
+
+    if (hWnd && flipModel) {
+      WinePresentationSourceStatus status = presentationSource.registerExclusiveFlip(hWnd);
+
+      if (status == WinePresentationSourceStatus::Conflict)
+        return DXGI_ERROR_INVALID_CALL;
+    }
+
     // Probe various modes to create the swap chain object
     Com<IDXGISwapChain4> frontendSwapChain;
 
@@ -567,7 +579,8 @@ namespace dxvk {
         return hr;
       }
 
-      frontendSwapChain = new DxgiSwapChain(this, presenter.ptr(), hWnd, &desc, &fsDesc, pDevice);
+      frontendSwapChain = new DxgiSwapChain(this, presenter.ptr(), hWnd,
+        &desc, &fsDesc, pDevice, std::move(presentationSource));
     } else {
       Logger::err("DXGI: CreateSwapChainForHwnd: Unsupported device type");
       return DXGI_ERROR_UNSUPPORTED;
