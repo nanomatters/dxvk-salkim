@@ -10,6 +10,7 @@
 #include "../d3d11/d3d11_interfaces.h"
 
 #include "../util/util_time.h"
+#include "../util/util_gdi.h"
 
 #include "../wsi/wsi_window.h"
 #include "../wsi/wsi_monitor.h"
@@ -33,7 +34,8 @@ namespace dxvk {
             HWND                        hWnd,
       const DXGI_SWAP_CHAIN_DESC1*      pDesc,
       const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*  pFullscreenDesc,
-            IUnknown*                   pDevice);
+            IUnknown*                   pDevice,
+            WinePresentationSource&&    presentationSource);
     
     ~DxgiSwapChain();
     
@@ -187,6 +189,7 @@ namespace dxvk {
     Com<IDXGIAdapter>               m_adapter;
     Com<IDXGIOutput1>               m_target;
     Com<IDXGIVkMonitorInfo>         m_monitorInfo;
+    WinePresentationSource         m_presentationSource;
     
     HWND                            m_window;
     DXGI_SWAP_CHAIN_DESC1           m_desc;

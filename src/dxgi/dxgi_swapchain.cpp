@@ -15,8 +15,10 @@ namespace dxvk {
           HWND                        hWnd,
     const DXGI_SWAP_CHAIN_DESC1*      pDesc,
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*  pFullscreenDesc,
-          IUnknown*                   pDevice)
+          IUnknown*                   pDevice,
+          WinePresentationSource&&    presentationSource)
   : m_factory   (pFactory),
+    m_presentationSource(std::move(presentationSource)),
     m_window    (hWnd),
     m_desc      (*pDesc),
     m_descFs    (*pFullscreenDesc),
@@ -377,6 +379,9 @@ namespace dxvk {
     if (SyncInterval > 4)
       return DXGI_ERROR_INVALID_CALL;
 
+    const bool flipModel = m_desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
+                        || m_desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
     if ((m_desc.SwapEffect == DXGI_SWAP_EFFECT_DISCARD || m_desc.SwapEffect == DXGI_SWAP_EFFECT_SEQUENTIAL) && wsi::isMinimized(m_window))
       return DXGI_STATUS_OCCLUDED;
     bool occluded = !m_descFs.Windowed && wsi::isOccluded(m_window) && !wsi::isMinimized(m_window);
@@ -401,6 +406,9 @@ namespace dxvk {
         m_hud->render(m_presenterHud.ptr(), m_desc.Width, m_desc.Height);
 
       hr = m_presenter->Present(SyncInterval, PresentFlags, pPresentParameters);
+
+      if (!(PresentFlags & DXGI_PRESENT_TEST) && flipModel && m_descFs.Windowed && hr == S_OK)
+        m_presentationSource.activate();
     }
 
     if (PresentFlags & DXGI_PRESENT_TEST)
