@@ -1,13 +1,14 @@
 #include <algorithm>
+#include <array>
 #include <iomanip>
 #include <set>
 #include <sstream>
-#include <string_view>
 #include <type_traits>
 
 #include "dxvk_device_info.h"
 #include "dxvk_instance.h"
 #include "dxvk_limits.h"
+#include "hud/dxvk_hud_item.h"
 
 namespace dxvk {
 
@@ -17,27 +18,8 @@ namespace dxvk {
     if (config.empty())
       config = instance.options().hud;
 
-    for (size_t pos = 0; pos < config.size(); ) {
-      size_t end = config.find(',', pos);
-
-      if (end == std::string::npos)
-        end = config.size();
-
-      size_t mid = config.find('=', pos);
-      size_t length = mid != std::string::npos && mid < end
-        ? mid - pos
-        : end - pos;
-      std::string_view token(config.data() + pos, length);
-
-      if (token == "full" || token == "present_latency" ||
-          token == "latency.queue" || token == "latency.display" ||
-          token == "latency.present" || token == "latency.interval")
-        return true;
-
-      pos = end + 1;
-    }
-
-    return false;
+    return hud::HudItemSet(std::move(config),
+      instance.options().hudFpsLowsWindow).presentTelemetryEnabled();
   }
 
   #define CORE_VERSIONS                            \
