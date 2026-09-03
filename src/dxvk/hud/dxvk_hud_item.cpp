@@ -201,11 +201,15 @@ namespace dxvk::hud {
               uint32_t            color,
         const std::string&        text) override {
         if (!text.empty())
-          m_draws.push_back({ size, position, color, text, m_line });
+          m_draws.push_back({ size, position, color, text, m_line, m_bottom });
       }
 
       void setLine(size_t line) {
         m_line = line;
+      }
+
+      void setBottom(bool bottom) {
+        m_bottom = bottom;
       }
 
       void replay(
@@ -214,10 +218,7 @@ namespace dxvk::hud {
               uint32_t            surfaceHeight,
               float               scale,
               bool                horizontal,
-              bool                center,
-              bool                bottom) const {
-        constexpr int64_t gap = 24;
-
+              bool                center) const {
         if (m_draws.empty())
           return;
 
@@ -230,12 +231,54 @@ namespace dxvk::hud {
           ? int64_t(double(surfaceHeight) / scale)
           : 0;
 
-        if (!horizontal) {
-          int64_t left = m_draws.front().position.x;
-          int64_t right = left;
-          int64_t lastBaseline = m_draws.front().position.y;
+        for (size_t first = 0; first < m_draws.size();) {
+          size_t end = first + 1;
 
-          for (const auto& draw : m_draws) {
+          while (end < m_draws.size()
+              && m_draws[end].bottom == m_draws[first].bottom)
+            end += 1;
+
+          replayRange(renderer, horizontal, center,
+            haveWidth, logicalWidth, haveHeight, logicalHeight, first, end);
+          first = end;
+        }
+      }
+
+    private:
+
+      struct Draw {
+        uint32_t size;
+        HudPos position;
+        uint32_t color;
+        std::string text;
+        size_t line;
+        bool bottom;
+      };
+
+      std::vector<Draw> m_draws;
+      size_t m_line = 0;
+      bool m_bottom = false;
+
+      void replayRange(
+              HudRenderer&        renderer,
+              bool                horizontal,
+              bool                center,
+              bool                haveWidth,
+              int64_t             logicalWidth,
+              bool                haveHeight,
+              int64_t             logicalHeight,
+              size_t              drawFirst,
+              size_t              drawEnd) const {
+        constexpr int64_t gap = 24;
+        bool bottom = m_draws[drawFirst].bottom;
+
+        if (!horizontal) {
+          int64_t left = m_draws[drawFirst].position.x;
+          int64_t right = left;
+          int64_t lastBaseline = m_draws[drawFirst].position.y;
+
+          for (size_t i = drawFirst; i < drawEnd; i++) {
+            const auto& draw = m_draws[i];
             left = std::min<int64_t>(left, draw.position.x);
             right = std::max<int64_t>(right,
               int64_t(draw.position.x) + getTextWidth(draw));
@@ -249,7 +292,8 @@ namespace dxvk::hud {
             ? logicalHeight - 20 - lastBaseline
             : 0;
 
-          for (const auto& draw : m_draws) {
+          for (size_t i = drawFirst; i < drawEnd; i++) {
+            const auto& draw = m_draws[i];
             int64_t drawX = x + int64_t(draw.position.x) - left;
             int64_t drawY = int64_t(draw.position.y) + yOffset;
             HudPos position = {
@@ -268,16 +312,16 @@ namespace dxvk::hud {
         }
 
         constexpr int64_t lineHeight = 20;
-        size_t lastLine = m_draws.back().line;
+        size_t lastLine = m_draws[drawEnd - 1].line;
 
-        for (size_t first = 0; first < m_draws.size();) {
+        for (size_t first = drawFirst; first < drawEnd;) {
           size_t line = m_draws[first].line;
           size_t lineEnd = first;
           int64_t totalWidth = -gap;
 
-          while (lineEnd < m_draws.size() && m_draws[lineEnd].line == line) {
+          while (lineEnd < drawEnd && m_draws[lineEnd].line == line) {
             int64_t left, right;
-            lineEnd = getLineBounds(lineEnd, &left, &right);
+            lineEnd = getLineBounds(lineEnd, drawEnd, &left, &right);
             totalWidth += right - left + gap;
           }
 
@@ -291,7 +335,7 @@ namespace dxvk::hud {
 
           for (size_t i = first; i < lineEnd;) {
             int64_t left, right;
-            size_t end = getLineBounds(i, &left, &right);
+            size_t end = getLineBounds(i, drawEnd, &left, &right);
 
             for (size_t j = i; j < end; j++) {
               int64_t drawX = x + int64_t(m_draws[j].position.x) - left;
@@ -316,25 +360,13 @@ namespace dxvk::hud {
         }
       }
 
-    private:
-
-      struct Draw {
-        uint32_t size;
-        HudPos position;
-        uint32_t color;
-        std::string text;
-        size_t line;
-      };
-
-      std::vector<Draw> m_draws;
-      size_t m_line = 0;
-
       int64_t getTextWidth(const Draw& draw) const {
         return textWidth(draw.size, draw.text);
       }
 
       size_t getLineBounds(
               size_t              first,
+              size_t              limit,
               int64_t*            pLeft,
               int64_t*            pRight) const {
         int32_t y = m_draws[first].position.y;
@@ -342,7 +374,7 @@ namespace dxvk::hud {
         int64_t right = left;
         size_t end = first;
 
-        while (end < m_draws.size() &&
+        while (end < limit &&
                m_draws[end].line == m_draws[first].line &&
                m_draws[end].position.y == y) {
           left = std::min<int64_t>(left, m_draws[end].position.x);
@@ -928,15 +960,20 @@ namespace dxvk::hud {
     std::vector<bool> added(m_items.size());
     std::vector<size_t> order;
     std::vector<size_t> lines;
+    std::vector<bool> bottomItems;
     size_t line = 0;
+    bool afterBottom = false;
+    bool hasBottomMarker = false;
 
     order.reserve(m_items.size());
     lines.reserve(m_items.size());
+    bottomItems.reserve(m_items.size());
 
     auto appendItem = [&] (size_t index) {
       if (!added[index]) {
         order.push_back(index);
         lines.push_back(line);
+        bottomItems.push_back(afterBottom);
         added[index] = true;
       }
     };
@@ -953,6 +990,12 @@ namespace dxvk::hud {
         continue;
       } else if (token == "newline") {
         line += 1;
+      } else if (token == "bottom") {
+        if (!afterBottom)
+          line = 0;
+
+        afterBottom = true;
+        hasBottomMarker = true;
       } else if (token == "1") {
         appendNamedItems("devinfo");
         appendNamedItems("fps");
@@ -981,6 +1024,19 @@ namespace dxvk::hud {
     m_itemNames = std::move(orderedNames);
     m_items = std::move(orderedItems);
     m_itemLines = std::move(lines);
+    m_itemBottom = std::move(bottomItems);
+
+    bool haveTopItems = false;
+    bool haveBottomItems = false;
+
+    for (size_t i = 0; i < m_items.size(); i++) {
+      if (m_items[i]->supportsHorizontalLayout()) {
+        haveTopItems |= !m_itemBottom[i];
+        haveBottomItems |= m_itemBottom[i];
+      }
+    }
+
+    m_splitBottom = hasBottomMarker && haveTopItems && haveBottomItems;
     m_itemsOrdered = true;
   }
 
@@ -1016,9 +1072,23 @@ namespace dxvk::hud {
     HudTextLayoutRenderer layout;
     HudPos position = options.horizontal ? HudPos{ 0, 0 } : HudPos{ 8, 8 };
     size_t line = std::numeric_limits<size_t>::max();
+    bool currentBottom = false;
+    bool haveRegion = false;
 
     for (size_t i = 0; i < m_items.size(); i++) {
       if (m_items[i]->supportsHorizontalLayout()) {
+        bool itemBottom = m_splitBottom ? m_itemBottom[i] : options.bottom;
+        bool regionChanged = !haveRegion || currentBottom != itemBottom;
+
+        if (regionChanged) {
+          currentBottom = itemBottom;
+          haveRegion = true;
+          line = std::numeric_limits<size_t>::max();
+          position = options.horizontal ? HudPos{ 0, 0 } : HudPos{ 8, 8 };
+        }
+
+        layout.setBottom(itemBottom);
+
         if (options.horizontal && m_hasNewline) {
           if (line != m_itemLines[i]) {
             line = m_itemLines[i];
@@ -1033,7 +1103,7 @@ namespace dxvk::hud {
     }
 
     layout.replay(renderer, surfaceWidth, surfaceHeight, options.scale,
-      options.horizontal, options.center, options.bottom);
+      options.horizontal, options.center);
     position = { 8, 8 };
 
     for (const auto& item : m_items) {
