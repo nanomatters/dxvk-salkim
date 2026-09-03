@@ -472,7 +472,7 @@ namespace dxvk::hud {
 
 
   void HudItemSet::addSystemInfoItems() {
-    if (m_enableFull) {
+    if (m_enableFull && !isDisabled("systeminfo")) {
       uint32_t fields = HudSystemInfoItem::All;
 
       if (isDisabled("proton"))
