@@ -1311,9 +1311,15 @@ namespace dxvk::hud {
         powerLimit = str::format(deciwatts / 10, ".", deciwatts % 10);
       }
 
-      if (m_requested & D3DKMT_WINE_CPU_TELEMETRY_POWER)
-        m_values[size_t(HudCpuTelemetryMetric::Power)] =
-          str::format(power, " / ", powerLimit, " W");
+      if (m_requested & D3DKMT_WINE_CPU_TELEMETRY_POWER) {
+        if ((data.Valid & D3DKMT_WINE_CPU_TELEMETRY_POWER)
+         && !(data.Valid & D3DKMT_WINE_CPU_TELEMETRY_POWER_LIMIT))
+          m_values[size_t(HudCpuTelemetryMetric::Power)] =
+            str::format(power, " W");
+        else
+          m_values[size_t(HudCpuTelemetryMetric::Power)] =
+            str::format(power, " / ", powerLimit, " W");
+      }
 
       if (data.Valid & D3DKMT_WINE_CPU_TELEMETRY_TEMPERATURE) {
         m_values[size_t(HudCpuTelemetryMetric::Temperature)] =
