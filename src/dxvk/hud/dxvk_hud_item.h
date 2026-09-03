@@ -131,11 +131,21 @@ namespace dxvk::hud {
     bool presentTelemetryEnabled() const;
 
     bool isEnabled(const char* name) const {
-      return m_enableFull || m_enabled.find(name) != m_enabled.end();
+      return !isDisabled(name)
+          && (m_enableFull || m_enabled.find(name) != m_enabled.end());
     }
 
     bool isExplicitlyEnabled(const char* name) const {
-      return m_enabled.find(name) != m_enabled.end();
+      return !isDisabled(name) && m_enabled.find(name) != m_enabled.end();
+    }
+
+    bool isDisabled(const char* name) const {
+      return m_disabled.find(name) != m_disabled.end();
+    }
+
+    bool isGroupItemEnabled(const char* group, const char* name) const {
+      return !isDisabled(name)
+          && (isEnabled(group) || isExplicitlyEnabled(name));
     }
 
     /**
@@ -186,6 +196,7 @@ namespace dxvk::hud {
 
     bool                                          m_enableFull = false;
     std::unordered_set<std::string>               m_enabled;
+    std::unordered_set<std::string>               m_disabled;
     std::unordered_map<std::string, std::string>  m_options;
     std::vector<std::string>                      m_layoutTokens;
     std::vector<std::string>                      m_itemNames;
@@ -260,7 +271,8 @@ namespace dxvk::hud {
 
     HudReflexItem(
       const Rc<HudReflexData>& data,
-            HudReflexMetric    metric);
+            HudReflexMetric    metric,
+            uint64_t           metricMask = ~uint64_t(0));
 
     void update(
             dxvk::high_resolution_clock::time_point time);
@@ -276,6 +288,7 @@ namespace dxvk::hud {
 
     Rc<HudReflexData> m_data;
     HudReflexMetric   m_metric;
+    uint64_t          m_metricMask;
 
   };
 
@@ -332,7 +345,8 @@ namespace dxvk::hud {
 
     HudPresentTelemetryItem(
       const Rc<HudPresentTelemetryData>& data,
-            HudPresentTelemetryMetric   metric);
+            HudPresentTelemetryMetric   metric,
+            uint64_t                    metricMask = ~uint64_t(0));
 
     void update(
             dxvk::high_resolution_clock::time_point time);
@@ -348,6 +362,7 @@ namespace dxvk::hud {
 
     Rc<HudPresentTelemetryData> m_data;
     HudPresentTelemetryMetric   m_metric;
+    uint64_t                    m_metricMask;
 
   };
 
@@ -376,7 +391,8 @@ namespace dxvk::hud {
       const HudTelemetryMetricInfo* metrics,
             size_t                metricCount,
             size_t                metric,
-            uint32_t              labelColor);
+            uint32_t              labelColor,
+            uint64_t              metricMask = ~uint64_t(0));
 
     void update(
             dxvk::high_resolution_clock::time_point time);
@@ -394,6 +410,7 @@ namespace dxvk::hud {
     size_t m_metricCount;
     size_t m_metric;
     uint32_t m_labelColor;
+    uint64_t m_metricMask;
   };
 
 
