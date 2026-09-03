@@ -91,6 +91,30 @@ namespace dxvk::hud {
     constexpr uint32_t HudTelemetryValueColor = 0xffffffffu;
 
 
+    template<typename MetricInfo, size_t MetricCount>
+    uint64_t getEnabledMetricMask(
+      const HudItemSet&                         items,
+      const char*                               group,
+      const std::array<MetricInfo, MetricCount>& metrics) {
+      static_assert(MetricCount <= 64);
+
+      uint64_t result = 0;
+
+      for (size_t i = 0; i < MetricCount; i++) {
+        if (items.isGroupItemEnabled(group, metrics[i].option))
+          result |= uint64_t(1) << i;
+      }
+
+      return result;
+    }
+
+
+    template<typename Metric>
+    bool hasMetric(uint64_t mask, Metric metric) {
+      return mask & (uint64_t(1) << size_t(metric));
+    }
+
+
     size_t reflexMetricIndex(HudReflexMetric metric) {
       return size_t(metric);
     }
@@ -377,20 +401,22 @@ namespace dxvk::hud {
           configStr.substr(mid + 1, end - mid - 1) });
       } else {
         std::string token = configStr.substr(pos, end - pos);
-        m_enabled.insert(token);
-        m_layoutTokens.push_back(token);
-
-        if (token == "newline")
-          m_hasNewline = true;
+        if (!token.empty() && token[0] == '-') {
+          if (token.size() > 1)
+            m_disabled.insert(token.substr(1));
+        } else {
+          m_enabled.insert(token);
+          m_layoutTokens.push_back(token);
+        }
       }
 
       pos = end + 1;
     }
 
-    if (m_enabled.find("full") != m_enabled.end())
+    if (isExplicitlyEnabled("full"))
       m_enableFull = true;
 
-    if (m_enabled.find("1") != m_enabled.end()) {
+    if (isExplicitlyEnabled("1")) {
       m_enabled.insert("devinfo");
       m_enabled.insert("fps");
     }
@@ -399,9 +425,10 @@ namespace dxvk::hud {
       getOption<float>("scale", 1.0f), 0.25f, 4.0f);
     m_renderOptions.opacity = std::clamp(
       getOption<float>("opacity", 1.0f), 0.1f, 1.0f);
-    m_renderOptions.horizontal = m_enabled.find("horizontal") != m_enabled.end();
-    m_renderOptions.center = m_enabled.find("center") != m_enabled.end();
-    m_renderOptions.bottom = m_enabled.find("bottom") != m_enabled.end();
+    m_renderOptions.horizontal = isExplicitlyEnabled("horizontal");
+    m_renderOptions.center = isExplicitlyEnabled("center");
+    m_renderOptions.bottom = isExplicitlyEnabled("bottom");
+    m_hasNewline = isExplicitlyEnabled("newline");
   }
 
 
@@ -412,9 +439,27 @@ namespace dxvk::hud {
 
   void HudItemSet::addSystemInfoItems() {
     if (m_enableFull) {
-      add<HudSystemInfoItem>("systeminfo", -1, HudSystemInfoItem::All);
+      uint32_t fields = HudSystemInfoItem::All;
+
+      if (isDisabled("proton"))
+        fields &= ~HudSystemInfoItem::Proton;
+      if (isDisabled("wine"))
+        fields &= ~HudSystemInfoItem::Wine;
+      if (isDisabled("winsys"))
+        fields &= ~HudSystemInfoItem::Display;
+
+      if (fields)
+        add<HudSystemInfoItem>("systeminfo", -1, fields);
     } else if (isEnabled("systeminfo")) {
-      add<HudSystemInfoItem>("systeminfo", -1, HudSystemInfoItem::System);
+      uint32_t fields = HudSystemInfoItem::System;
+
+      if (isDisabled("proton"))
+        fields &= ~HudSystemInfoItem::Proton;
+      if (isDisabled("winsys"))
+        fields &= ~HudSystemInfoItem::Display;
+
+      if (fields)
+        add<HudSystemInfoItem>("systeminfo", -1, fields);
       add<HudSystemInfoItem>("wine", -1, HudSystemInfoItem::Wine);
     } else {
       add<HudSystemInfoItem>("proton", -1, HudSystemInfoItem::Proton);
@@ -428,27 +473,31 @@ namespace dxvk::hud {
     const Rc<DxvkAdapter>& adapter) {
     uint32_t requested = 0;
     bool group = isEnabled("gpu");
-    bool info = group || isEnabled("gpu.name") || isEnabled("gpu.driver");
+    uint64_t metricMask = getEnabledMetricMask(
+      *this, "gpu", HudGpuTelemetryMetrics);
+
+    bool info = hasMetric(metricMask, HudGpuTelemetryMetric::Name)
+             || hasMetric(metricMask, HudGpuTelemetryMetric::Driver);
 
     if (!adapter)
       return;
 
-    if (group || isEnabled("gpu.power"))
+    if (hasMetric(metricMask, HudGpuTelemetryMetric::Power))
       requested |= D3DKMT_WINE_GPU_TELEMETRY_POWER
                 |  D3DKMT_WINE_GPU_TELEMETRY_POWER_LIMIT;
-    if (group || isEnabled("gpu.temp"))
+    if (hasMetric(metricMask, HudGpuTelemetryMetric::Temperature))
       requested |= D3DKMT_WINE_GPU_TELEMETRY_TEMPERATURE;
-    if (group || isEnabled("gpu.load"))
+    if (hasMetric(metricMask, HudGpuTelemetryMetric::Utilization))
       requested |= D3DKMT_WINE_GPU_TELEMETRY_UTILIZATION;
-    if (group || isEnabled("gpu.clock"))
+    if (hasMetric(metricMask, HudGpuTelemetryMetric::GraphicsClock))
       requested |= D3DKMT_WINE_GPU_TELEMETRY_CLOCK;
-    if (group || isEnabled("gpu.memclock"))
+    if (hasMetric(metricMask, HudGpuTelemetryMetric::MemoryClock))
       requested |= D3DKMT_WINE_GPU_TELEMETRY_MEMORY_CLOCK;
-    if (group || isEnabled("gpu.vram"))
+    if (hasMetric(metricMask, HudGpuTelemetryMetric::Vram))
       requested |= D3DKMT_WINE_GPU_TELEMETRY_VRAM;
-    if (group || isEnabled("gpu.memload"))
+    if (hasMetric(metricMask, HudGpuTelemetryMetric::MemoryUtilization))
       requested |= D3DKMT_WINE_GPU_TELEMETRY_MEMORY_UTIL;
-    if (group || isEnabled("gpu.pcie"))
+    if (hasMetric(metricMask, HudGpuTelemetryMetric::Pcie))
       requested |= D3DKMT_WINE_GPU_TELEMETRY_PCIE;
     if (!info && !requested)
       return;
@@ -457,13 +506,16 @@ namespace dxvk::hud {
 
     if (group) {
       add<HudTelemetryItem>("gpu", -1, data, HudGpuTelemetryMetrics.data(),
-        HudGpuTelemetryMetrics.size(), HudGpuTelemetryMetrics.size(), HudGpuTelemetryLabelColor);
+        HudGpuTelemetryMetrics.size(), HudGpuTelemetryMetrics.size(),
+        HudGpuTelemetryLabelColor, metricMask);
       return;
     }
 
     for (size_t i = 0; i < HudGpuTelemetryMetrics.size(); i++) {
-      add<HudTelemetryItem>(HudGpuTelemetryMetrics[i].option, -1, data,
-        HudGpuTelemetryMetrics.data(), HudGpuTelemetryMetrics.size(), i, HudGpuTelemetryLabelColor);
+      if (metricMask & (uint64_t(1) << i))
+        add<HudTelemetryItem>(HudGpuTelemetryMetrics[i].option, -1, data,
+          HudGpuTelemetryMetrics.data(), HudGpuTelemetryMetrics.size(), i,
+          HudGpuTelemetryLabelColor);
     }
   }
 
@@ -472,16 +524,19 @@ namespace dxvk::hud {
     const Rc<DxvkAdapter>& adapter) {
     uint32_t requested = 0;
     bool group = isEnabled("cpu");
-    bool info = group || isEnabled("cpu.name");
+    uint64_t metricMask = getEnabledMetricMask(
+      *this, "cpu", HudCpuTelemetryMetrics);
 
-    if (group || isEnabled("cpu.power"))
+    bool info = hasMetric(metricMask, HudCpuTelemetryMetric::Name);
+
+    if (hasMetric(metricMask, HudCpuTelemetryMetric::Power))
       requested |= D3DKMT_WINE_CPU_TELEMETRY_POWER
                 |  D3DKMT_WINE_CPU_TELEMETRY_POWER_LIMIT;
-    if (group || isEnabled("cpu.temp"))
+    if (hasMetric(metricMask, HudCpuTelemetryMetric::Temperature))
       requested |= D3DKMT_WINE_CPU_TELEMETRY_TEMPERATURE;
-    if (group || isEnabled("cpu.load"))
+    if (hasMetric(metricMask, HudCpuTelemetryMetric::Utilization))
       requested |= D3DKMT_WINE_CPU_TELEMETRY_UTILIZATION;
-    if (group || isEnabled("cpu.clock"))
+    if (hasMetric(metricMask, HudCpuTelemetryMetric::Clock))
       requested |= D3DKMT_WINE_CPU_TELEMETRY_CLOCK;
     if (!info && !requested)
       return;
@@ -490,13 +545,16 @@ namespace dxvk::hud {
 
     if (group) {
       add<HudTelemetryItem>("cpu", -1, data, HudCpuTelemetryMetrics.data(),
-        HudCpuTelemetryMetrics.size(), HudCpuTelemetryMetrics.size(), HudCpuTelemetryLabelColor);
+        HudCpuTelemetryMetrics.size(), HudCpuTelemetryMetrics.size(),
+        HudCpuTelemetryLabelColor, metricMask);
       return;
     }
 
     for (size_t i = 0; i < HudCpuTelemetryMetrics.size(); i++) {
-      add<HudTelemetryItem>(HudCpuTelemetryMetrics[i].option, -1, data,
-        HudCpuTelemetryMetrics.data(), HudCpuTelemetryMetrics.size(), i, HudCpuTelemetryLabelColor);
+      if (metricMask & (uint64_t(1) << i))
+        add<HudTelemetryItem>(HudCpuTelemetryMetrics[i].option, -1, data,
+          HudCpuTelemetryMetrics.data(), HudCpuTelemetryMetrics.size(), i,
+          HudCpuTelemetryLabelColor);
     }
   }
 
@@ -506,25 +564,25 @@ namespace dxvk::hud {
     if (!lowLatencyDevice)
       return;
 
-    if (isEnabled("reflex")) {
-      Rc<HudReflexData> data = new HudReflexData(lowLatencyDevice);
-      add<HudReflexItem>("reflex", -1, data, HudReflexMetric::Count);
-      return;
-    }
+    bool group = isEnabled("reflex");
+    uint64_t metricMask = getEnabledMetricMask(
+      *this, "reflex", HudReflexMetrics);
 
-    bool enabled = false;
-
-    for (const auto& metric : HudReflexMetrics)
-      enabled |= isEnabled(metric.option);
-
-    if (!enabled)
+    if (!metricMask)
       return;
 
     Rc<HudReflexData> data = new HudReflexData(lowLatencyDevice);
 
+    if (group) {
+      add<HudReflexItem>("reflex", -1, data,
+        HudReflexMetric::Count, metricMask);
+      return;
+    }
+
     for (size_t i = 0; i < HudReflexMetrics.size(); i++) {
-      add<HudReflexItem>(HudReflexMetrics[i].option, -1,
-        data, HudReflexMetric(i));
+      if (metricMask & (uint64_t(1) << i))
+        add<HudReflexItem>(HudReflexMetrics[i].option, -1,
+          data, HudReflexMetric(i));
     }
   }
 
@@ -537,25 +595,24 @@ namespace dxvk::hud {
       return;
 
     bool group = items.isEnabled("present_latency");
-    bool enabled = group;
+    uint64_t metricMask = getEnabledMetricMask(
+      items, "present_latency", HudPresentTelemetryMetrics);
 
-    for (const auto& metric : HudPresentTelemetryMetrics)
-      enabled |= items.isEnabled(metric.option);
-
-    if (!enabled)
+    if (!metricMask)
       return;
 
     Rc<HudPresentTelemetryData> data = new HudPresentTelemetryData(presenter);
 
     if (group) {
       items.add<HudPresentTelemetryItem>("present_latency", -1,
-        data, HudPresentTelemetryMetric::Count);
+        data, HudPresentTelemetryMetric::Count, metricMask);
       return;
     }
 
     for (size_t i = 0; i < HudPresentTelemetryMetrics.size(); i++) {
-      items.add<HudPresentTelemetryItem>(HudPresentTelemetryMetrics[i].option, -1,
-        data, HudPresentTelemetryMetric(i));
+      if (metricMask & (uint64_t(1) << i))
+        items.add<HudPresentTelemetryItem>(HudPresentTelemetryMetrics[i].option, -1,
+          data, HudPresentTelemetryMetric(i));
     }
   }
 
@@ -573,11 +630,8 @@ namespace dxvk::hud {
 
 
   bool HudItemSet::presentTelemetryEnabled() const {
-    if (isEnabled("present_latency"))
-      return true;
-
     for (const auto& metric : HudPresentTelemetryMetrics) {
-      if (isEnabled(metric.option))
+      if (isGroupItemEnabled("present_latency", metric.option))
         return true;
     }
 
@@ -667,8 +721,11 @@ namespace dxvk::hud {
 
   HudReflexItem::HudReflexItem(
     const Rc<HudReflexData>& data,
-          HudReflexMetric    metric)
-  : m_data(data), m_metric(metric) { }
+          HudReflexMetric    metric,
+          uint64_t           metricMask)
+  : m_data      (data),
+    m_metric    (metric),
+    m_metricMask(metricMask) { }
 
 
   void HudReflexItem::update(
@@ -693,21 +750,29 @@ namespace dxvk::hud {
     uint32_t valueOffset = spaceWidth;
 
     if (!options.horizontal) {
-      for (size_t i = first; i < end; i++)
-        valueOffset = std::max(valueOffset,
-          renderer.textWidth(16, HudReflexMetrics[i].label) + spaceWidth);
+      for (size_t i = first; i < end; i++) {
+        if (m_metricMask & (uint64_t(1) << i))
+          valueOffset = std::max(valueOffset,
+            renderer.textWidth(16, HudReflexMetrics[i].label) + spaceWidth);
+      }
     }
 
+    bool firstRow = true;
+
     for (size_t i = first; i < end; i++) {
+      if (!(m_metricMask & (uint64_t(1) << i)))
+        continue;
+
       uint32_t rowValueOffset = options.horizontal
         ? renderer.textWidth(16, HudReflexMetrics[i].label) + spaceWidth
         : valueOffset;
 
-      position.y += i == first ? 16 : 20;
+      position.y += firstRow ? 16 : 20;
       renderer.drawText(16, position, HudReflexLabelColor,
         HudReflexMetrics[i].label);
       renderer.drawText(16, { position.x + int32_t(rowValueOffset), position.y },
         HudTelemetryValueColor, m_data->value(HudReflexMetric(i)));
+      firstRow = false;
     }
 
     position.y += 8;
@@ -797,8 +862,11 @@ namespace dxvk::hud {
 
   HudPresentTelemetryItem::HudPresentTelemetryItem(
     const Rc<HudPresentTelemetryData>& data,
-          HudPresentTelemetryMetric   metric)
-  : m_data(data), m_metric(metric) { }
+          HudPresentTelemetryMetric   metric,
+          uint64_t                    metricMask)
+  : m_data      (data),
+    m_metric    (metric),
+    m_metricMask(metricMask) { }
 
 
   void HudPresentTelemetryItem::update(
@@ -823,21 +891,29 @@ namespace dxvk::hud {
     uint32_t valueOffset = spaceWidth;
 
     if (!options.horizontal) {
-      for (size_t i = first; i < end; i++)
-        valueOffset = std::max(valueOffset,
-          renderer.textWidth(16, HudPresentTelemetryMetrics[i].label) + spaceWidth);
+      for (size_t i = first; i < end; i++) {
+        if (m_metricMask & (uint64_t(1) << i))
+          valueOffset = std::max(valueOffset,
+            renderer.textWidth(16, HudPresentTelemetryMetrics[i].label) + spaceWidth);
+      }
     }
 
+    bool firstRow = true;
+
     for (size_t i = first; i < end; i++) {
+      if (!(m_metricMask & (uint64_t(1) << i)))
+        continue;
+
       uint32_t rowValueOffset = options.horizontal
         ? renderer.textWidth(16, HudPresentTelemetryMetrics[i].label) + spaceWidth
         : valueOffset;
 
-      position.y += i == first ? 16 : 20;
+      position.y += firstRow ? 16 : 20;
       renderer.drawText(16, position, HudPresentTelemetryLabelColor,
         HudPresentTelemetryMetrics[i].label);
       renderer.drawText(16, { position.x + int32_t(rowValueOffset), position.y },
         HudTelemetryValueColor, m_data->value(HudPresentTelemetryMetric(i)));
+      firstRow = false;
     }
 
     position.y += 8;
@@ -873,7 +949,9 @@ namespace dxvk::hud {
     };
 
     for (const auto& token : m_layoutTokens) {
-      if (token == "newline") {
+      if (isDisabled(token.c_str())) {
+        continue;
+      } else if (token == "newline") {
         line += 1;
       } else if (token == "1") {
         appendNamedItems("devinfo");
@@ -1205,12 +1283,14 @@ namespace dxvk::hud {
     const HudTelemetryMetricInfo* metrics,
           size_t                metricCount,
           size_t                metric,
-          uint32_t              labelColor)
+          uint32_t              labelColor,
+          uint64_t              metricMask)
   : m_data       (data),
     m_metrics    (metrics),
     m_metricCount(metricCount),
     m_metric     (metric),
-    m_labelColor (labelColor) { }
+    m_labelColor (labelColor),
+    m_metricMask (metricMask) { }
 
 
   void HudTelemetryItem::update(
@@ -1235,12 +1315,17 @@ namespace dxvk::hud {
     uint32_t valueOffset = spaceWidth;
 
     if (!options.horizontal) {
-      for (size_t i = first; i < end; i++)
-        valueOffset = std::max(valueOffset,
-          renderer.textWidth(16, m_metrics[i].label) + spaceWidth);
+      for (size_t i = first; i < end; i++) {
+        if (m_metricMask & (uint64_t(1) << i))
+          valueOffset = std::max(valueOffset,
+            renderer.textWidth(16, m_metrics[i].label) + spaceWidth);
+      }
     }
 
     for (size_t i = first; i < end; i++) {
+      if (!(m_metricMask & (uint64_t(1) << i)))
+        continue;
+
       uint32_t rowValueOffset = options.horizontal
         ? renderer.textWidth(16, m_metrics[i].label) + spaceWidth
         : valueOffset;
