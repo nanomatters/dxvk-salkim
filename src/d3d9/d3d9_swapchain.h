@@ -9,7 +9,7 @@
 #include "../dxvk/dxvk_swapchain_blitter.h"
 
 #include "../util/sync/sync_signal.h"
-
+#include "../util/util_gdi.h"
 #include "../wsi/wsi_window.h"
 #include "../wsi/wsi_monitor.h"
 
@@ -174,6 +174,8 @@ namespace dxvk {
     double                    m_displayRefreshRate = 0.0;
     bool                      m_displayRefreshRateDirty = true;
 
+    WinePresentationSource    m_presentationSource;
+
     bool                      m_warnedAboutGDIFallback = false;
 
     VkColorSpaceKHR           m_colorspace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
@@ -188,7 +190,13 @@ namespace dxvk {
 
     D3D9VkExtSwapchain m_swapchainExt;
 
-    void PresentImage(UINT PresentInterval);
+    bool PresentImage(UINT PresentInterval);
+
+    HRESULT PresentImageWithoutFlip(
+            double              FrameRate,
+            bool                DoNotWait);
+
+    void RotateBackBuffers();
 
     Rc<Presenter> CreatePresenter(
             HWND                Window,
@@ -205,6 +213,8 @@ namespace dxvk {
     void InitRamp();
 
     void UpdateTargetFrameRate(uint32_t SyncInterval);
+
+    double GetDiscardFrameRate(uint32_t SyncInterval) const;
 
     uint32_t GetActualFrameLatency();
 

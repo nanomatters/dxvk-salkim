@@ -37,6 +37,7 @@ namespace dxvk {
   struct DxvkPresentInfo {
     Rc<Presenter>       presenter = nullptr;
     uint64_t            frameId   = 0u;
+    bool                discard   = false;
     small_vector<VkRectLayerKHR, 4u> rects;
   };
 
@@ -130,7 +131,7 @@ namespace dxvk {
             DxvkPresentInfo     presentInfo,
             DxvkLatencyInfo     latencyInfo,
             uint64_t            submissionId);
-    
+
     /**
      * \brief Synchronizes with one queue submission
      * 
