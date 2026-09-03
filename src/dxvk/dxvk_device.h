@@ -656,6 +656,16 @@ namespace dxvk {
             uint64_t                  latencyFrameId,
             uint32_t                  rectCount,
       const VkRectLayerKHR*           rects);
+
+    /**
+     * \brief Completes a present without WSI
+     *
+     * Queues a logical present after all earlier GPU submissions without
+     * submitting a native swap-chain image.
+     */
+    void discardPresent(
+      const Rc<Presenter>&            presenter,
+            uint64_t                  frameId);
     
     /**
      * \brief Submits a command list

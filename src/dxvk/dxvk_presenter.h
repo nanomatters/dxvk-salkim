@@ -240,6 +240,17 @@ namespace dxvk {
     void signalFrame(uint64_t frameId);
 
     /**
+     * \brief Completes a frame without WSI
+     *
+     * Completes a logical present without presenting a native swap-chain
+     * image. It may advance past an obsolete WSI wait because the flip-model
+     * presenter has made the old BLT frame non-visible.
+     * \param [in] frameId Frame ID
+     */
+    void completeFrame(
+            uint64_t                frameId);
+
+    /**
      * \brief Changes sync interval
      *
      * Changes the Vulkan present mode as necessary.
@@ -435,7 +446,6 @@ namespace dxvk {
     VkResult                    m_acquireStatus = VK_NOT_READY;
     bool                        m_presentPending = false;
     bool                        m_presentRepaint = false;
-
     std::optional<VkHdrMetadataEXT> m_hdrMetadata;
     bool                        m_hdrMetadataDirty = false;
 
@@ -473,6 +483,11 @@ namespace dxvk {
 
     uint64_t                    m_reportQueueAddId = 0u;
     uint64_t                    m_reportQueueTakeId = 0u;
+
+    alignas(CACHE_LINE_SIZE)
+    dxvk::mutex                 m_pacingMutex;
+    uint64_t                    m_lastDiscardedFrameTimeHost = 0u;
+    dxvk::mutex                 m_signalMutex;
 
     bool                        m_hasGamescopeFenceSignalBug = false;
     bool                        m_hasNvidiaFenceSignalBug = false;
@@ -574,6 +589,8 @@ namespace dxvk {
             PresenterSync&            sync);
 
     void pushFrame(const PresenterFrame& frame);
+    void signalFrameValue(
+            uint64_t                  frameId);
 
     const PresenterFrame* findFrameEntry(
             uint64_t                  frameId) const;

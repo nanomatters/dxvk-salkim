@@ -128,6 +128,7 @@ namespace dxvk {
       pushFrame(PresenterFrame());
       m_frameThread.join();
     }
+
   }
 
 
@@ -460,11 +461,43 @@ namespace dxvk {
 
     { std::unique_lock lock(m_frameMutex);
 
-      m_lastSignaled = frameId;
+      m_lastSignaled = std::max(m_lastSignaled, frameId);
       canSignal = m_lastCompleted >= frameId;
     }
 
     if (canSignal)
+      signalFrameValue(frameId);
+  }
+
+
+  void Presenter::completeFrame(
+          uint64_t                frameId) {
+    if (!m_signal || !frameId)
+      return;
+
+    // Once a flip-model present has made this BLT update non-visible, waiting
+    // for an older WSI presentation would preserve an ordering Windows ignores.
+    std::lock_guard pacingLock(m_pacingMutex);
+    PresenterFrame frame = {};
+    { std::lock_guard lock(m_timingMutex);
+      if (m_timingMode.frameIntervalNs && m_lastDiscardedFrameTimeHost)
+        frame.targetTimeHost = m_lastDiscardedFrameTimeHost + dxvk::high_resolution_clock::get_ticks(
+          std::chrono::nanoseconds(m_timingMode.frameIntervalNs));
+    }
+    waitUntilFrameTargetTime(frame);
+    m_lastDiscardedFrameTimeHost = dxvk::high_resolution_clock::get_counter();
+    signalFrameValue(frameId);
+  }
+
+
+  void Presenter::signalFrameValue(
+          uint64_t                frameId) {
+    if (!m_signal || !frameId)
+      return;
+
+    std::lock_guard lock(m_signalMutex);
+
+    if (frameId > m_signal->value())
       m_signal->signal(frameId);
   }
 
@@ -2468,6 +2501,7 @@ namespace dxvk {
           m_frameQueuePopId += 1u;
           return;
         }
+
       }
 
       // If the frame is timed, wait for the calculated target time. This
@@ -2476,7 +2510,7 @@ namespace dxvk {
       // see consistent frame pacing.
       bool waited = frame.targetStage && waitUntilFrameTargetTime(frame);
 
-      // If we haven't waited yet, use present_wait to
+      // Preserve upstream FIFO completion waits alongside host-clock pacing.
       bool isFifoMode = frame.mode == VK_PRESENT_MODE_FIFO_KHR
                      || frame.mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR;
 
@@ -2502,11 +2536,21 @@ namespace dxvk {
       // but if timing is disabled then we should base feedback on present_wait.
       updatePresentTimingFeedback(frame.frameId, frame.stageQueries);
 
-      // If we hit the present_wait path, issue another wait to deal with lower
-      // than native frame rate limits. We should do so *after* committing present
-      // timings so that reported timings are reasonably close to actual vblank.
-      if (!waited)
-        waitUntilFrameTargetTime(frame);
+      {
+        std::lock_guard pacingLock(m_pacingMutex);
+
+        // A discarded BLT frame may already have advanced the signal past an
+        // obsolete WSI wait. Do not account or pace that old frame afterward.
+        if (frame.frameId > m_signal->value()) {
+          if (frame.tracker) {
+            frame.tracker->notifyGpuPresentEnd(frame.frameId);
+            frame.tracker = nullptr;
+          }
+
+          if (!waited)
+            waitUntilFrameTargetTime(frame);
+        }
+      }
 
       // Wake up any thread that may be waiting for the queue to become empty
       bool canSignal = false;
@@ -2515,14 +2559,14 @@ namespace dxvk {
         m_frameQueuePopId += 1u;
         m_frameDrain.notify_one();
 
-        m_lastCompleted = frame.frameId;
+        m_lastCompleted = std::max(m_lastCompleted, frame.frameId);
         canSignal = m_lastSignaled >= frame.frameId;
       }
 
       // Always signal even on error, since failures here
       // are transparent to the front-end.
       if (canSignal)
-        m_signal->signal(frame.frameId);
+        signalFrameValue(frame.frameId);
     }
   }
 

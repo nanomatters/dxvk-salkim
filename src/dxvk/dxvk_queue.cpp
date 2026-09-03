@@ -155,6 +155,8 @@ namespace dxvk {
           status = entry.submit.cmdList->submit(
             m_semaphores, m_timelines);
           entry.timelines = m_timelines;
+        } else if (entry.present.presenter != nullptr && entry.present.discard) {
+          status = VK_SUCCESS;
         } else if (entry.present.presenter != nullptr) {
           status = entry.present.presenter->presentImage(entry.present.frameId,
             entry.present.latencyFrameId, entry.present.rects.size(),
@@ -255,6 +257,10 @@ namespace dxvk {
           if (status != VK_ERROR_DEVICE_LOST)
             m_device->waitForIdle();
         }
+      } else if (entry.present.presenter != nullptr && entry.present.discard) {
+        entry.present.presenter->completeFrame(
+          entry.present.frameId);
+        entry.present.presenter = nullptr;
       } else if (entry.present.presenter != nullptr) {
         // Signal the frame and then immediately destroy the reference.
         // This is necessary since the front-end may want to explicitly

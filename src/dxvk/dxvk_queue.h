@@ -37,6 +37,7 @@ namespace dxvk {
     Rc<Presenter> presenter = nullptr;
     uint64_t frameId        = 0u;
     uint64_t latencyFrameId = 0u;
+    bool discard           = false;
     small_vector<VkRectLayerKHR, 4u> rects;
   };
 

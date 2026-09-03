@@ -160,6 +160,45 @@ namespace dxvk {
       D3DKMT_ESCAPE_SET_PRESENT_RECT_WINE = 0x80000001,
   } D3DKMT_ESCAPETYPE;
 
+  enum class WinePresentationSourceStatus {
+    Registered,
+    Conflict,
+  };
+
+  enum class WinePresentationBlitStatus {
+    Unavailable,
+    Allowed,
+    Suppressed,
+  };
+
+  class WinePresentationSource {
+  public:
+    WinePresentationSource() = default;
+    WinePresentationSource(const WinePresentationSource&) = delete;
+    WinePresentationSource& operator = (const WinePresentationSource&) = delete;
+
+    WinePresentationSource(WinePresentationSource&& other) noexcept;
+    WinePresentationSource& operator = (WinePresentationSource&& other) noexcept;
+
+    ~WinePresentationSource();
+
+    WinePresentationSourceStatus registerFlip(HWND window);
+    WinePresentationSourceStatus registerExclusiveFlip(HWND window);
+    void reset();
+    void activate();
+
+    static WinePresentationBlitStatus checkBlit(HWND window);
+
+  private:
+    WinePresentationSourceStatus registerFlip(HWND window, bool exclusive);
+
+    HWND     m_window = nullptr;
+    UINT     m_id = 0;
+    bool     m_registered = false;
+    bool     m_active = false;
+    bool     m_exclusive = false;
+  };
+
   typedef struct _D3DDDI_ESCAPEFLAGS
   {
       union
@@ -521,4 +560,5 @@ namespace dxvk {
   EXTERN_C WINBASEAPI NTSTATUS WINAPI D3DKMTQueryResourceInfoFromNtHandle(D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE *desc);
   NTSTATUS WINAPI D3DKMTReleaseKeyedMutex(D3DKMT_RELEASEKEYEDMUTEX *desc);
   EXTERN_C WINBASEAPI NTSTATUS WINAPI D3DKMTShareObjects(UINT count, const D3DKMT_HANDLE *handles, OBJECT_ATTRIBUTES *attr, UINT access, HANDLE *handle);
+
 }

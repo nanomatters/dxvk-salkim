@@ -607,6 +607,21 @@ namespace dxvk {
   }
 
 
+  void DxvkDevice::discardPresent(
+    const Rc<Presenter>&            presenter,
+          uint64_t                  frameId) {
+    DxvkPresentInfo presentInfo = { };
+    presentInfo.presenter = presenter;
+    presentInfo.frameId = frameId;
+    presentInfo.discard = true;
+
+    m_submissionQueue.present(presentInfo);
+
+    std::lock_guard<sync::Spinlock> statLock(m_statLock);
+    m_statCounters.addCtr(DxvkStatCounter::QueuePresentCount, 1);
+  }
+
+
   void DxvkDevice::submitCommandList(
     const Rc<DxvkCommandList>&      commandList,
           uint64_t                  submissionId) {
