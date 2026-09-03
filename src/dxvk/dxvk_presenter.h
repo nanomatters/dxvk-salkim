@@ -97,7 +97,6 @@ namespace dxvk {
    * window system integration.
    */
   class Presenter : public RcObject {
-
   public:
 
     Presenter(
@@ -166,6 +165,17 @@ namespace dxvk {
     void signalFrame(
             uint64_t                frameId,
       const Rc<DxvkLatencyTracker>& tracker);
+
+    /**
+     * \brief Completes a frame without WSI
+     *
+     * Completes a logical present without presenting a native swap-chain
+     * image. It may advance past an obsolete WSI wait because the flip-model
+     * presenter has made the old BLT frame non-visible.
+     * \param [in] frameId Frame ID
+     */
+    void completeFrame(
+            uint64_t                frameId);
 
     /**
      * \brief Changes sync interval
@@ -348,7 +358,6 @@ namespace dxvk {
     VkResult                    m_acquireStatus = VK_NOT_READY;
     bool                        m_presentPending = false;
     bool                        m_presentRepaint = false;
-
     std::optional<VkHdrMetadataEXT> m_hdrMetadata;
     bool                        m_hdrMetadataDirty = false;
 
@@ -371,6 +380,10 @@ namespace dxvk {
 
     alignas(CACHE_LINE_SIZE)
     FpsLimiter                  m_fpsLimiter;
+
+    alignas(CACHE_LINE_SIZE)
+    dxvk::mutex                 m_pacingMutex;
+    dxvk::mutex                 m_signalMutex;
 
     bool                        m_hasGamescopeFenceSignalBug = false;
 
@@ -432,6 +445,9 @@ namespace dxvk {
 
     void waitForSwapchainFence(
             PresenterSync&            sync);
+
+    void signalFrameValue(
+            uint64_t                  frameId);
 
     void runFrameThread();
 

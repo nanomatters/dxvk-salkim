@@ -13,6 +13,16 @@ namespace dxvk {
     return uint16_t(65535.0f * x);
   }
 
+  static bool IsFlipPresentation(D3DSWAPEFFECT swapEffect) {
+    return swapEffect == D3DSWAPEFFECT_FLIPEX;
+  }
+
+  static bool IsBlitPresentation(D3DSWAPEFFECT swapEffect) {
+    return swapEffect == D3DSWAPEFFECT_DISCARD
+        || swapEffect == D3DSWAPEFFECT_FLIP
+        || swapEffect == D3DSWAPEFFECT_COPY;
+  }
+
   D3D9SwapChainEx::D3D9SwapChainEx(
           D3D9DeviceEx*          pDevice,
           D3DPRESENT_PARAMETERS* pPresentParams,
@@ -150,13 +160,31 @@ namespace dxvk {
       m_displayRefreshRateDirty = true;
     }
 
+    const bool flipPresentation = m_presentParams.Windowed
+                               && IsFlipPresentation(m_presentParams.SwapEffect);
+
+    if (flipPresentation) {
+      if (m_presentationSource.registerFlip(m_window)
+          == WinePresentationSourceStatus::Conflict)
+        return D3DERR_INVALIDCALL;
+    } else {
+      m_presentationSource.reset();
+    }
+
+    bool suppressBlit = false;
+
+    if (m_presentParams.Windowed && IsBlitPresentation(m_presentParams.SwapEffect))
+      suppressBlit = WinePresentationSource::checkBlit(m_window)
+                  == WinePresentationBlitStatus::Suppressed;
+
     if (!UpdateWindowCtx())
       return D3D_OK;
 
-    if (options->deferSurfaceCreation && IsDeviceReset(m_wctx))
+    if (!suppressBlit && options->deferSurfaceCreation && IsDeviceReset(m_wctx))
       m_wctx->presenter->invalidateSurface();
 
-    m_wctx->presenter->setSyncInterval(presentInterval);
+    if (!suppressBlit)
+      m_wctx->presenter->setSyncInterval(presentInterval);
 
     UpdatePresentRegion(pSourceRect, pDestRect);
     UpdatePresentParameters();
@@ -182,22 +210,31 @@ namespace dxvk {
 
 #ifdef _WIN32
     const bool useGDIFallback = m_partialCopy && !SwapWithFrontBuffer();
-    if (useGDIFallback)
+    if (useGDIFallback && !suppressBlit)
       return PresentImageGDI(m_window);
 #endif
 
     try {
       UpdateWindowedRefreshRate();
+
+      if (suppressBlit)
+        return PresentImageWithoutFlip(GetDiscardFrameRate(presentInterval),
+          !!(dwFlags & D3DPRESENT_DONOTWAIT));
+
       UpdateTargetFrameRate(presentInterval);
-      PresentImage(presentInterval);
+      bool presented = PresentImage(presentInterval);
+
+      if (presented && flipPresentation)
+        m_presentationSource.activate();
+
       return D3D_OK;
     } catch (const DxvkError& e) {
       Logger::err(e.message());
 #ifdef _WIN32
-      return PresentImageGDI(m_window);
-#else
-      return D3DERR_DEVICEREMOVED;
+      if (!suppressBlit && IsBlitPresentation(m_presentParams.SwapEffect))
+        return PresentImageGDI(m_window);
 #endif
+      return D3DERR_DEVICEREMOVED;
     }
   }
 
@@ -626,7 +663,7 @@ namespace dxvk {
 
     this->NormalizePresentParameters(pPresentParams);
 
-    bool changeFullscreen = m_presentParams.Windowed != pPresentParams->Windowed;
+    const bool changeFullscreen = m_presentParams.Windowed != pPresentParams->Windowed;
 
     if (pPresentParams->Windowed) {
       if (changeFullscreen)
@@ -651,6 +688,11 @@ namespace dxvk {
         wsi::updateFullscreenWindow(m_monitor, m_window, true);
       }
     }
+
+    if (!pPresentParams->Windowed
+     || !IsFlipPresentation(pPresentParams->SwapEffect)
+     || m_window != pPresentParams->hDeviceWindow)
+      m_presentationSource.reset();
 
     m_presentParams = *pPresentParams;
 
@@ -835,7 +877,7 @@ namespace dxvk {
   }
 
 
-  void D3D9SwapChainEx::PresentImage(UINT SyncInterval) {
+  bool D3D9SwapChainEx::PresentImage(UINT SyncInterval) {
     m_parent->EndFrame(m_latencyTracker);
     m_parent->Flush();
 
@@ -936,6 +978,51 @@ namespace dxvk {
     if (m_latencyHud)
       m_latencyHud->accumulateStats(latencyStats);
 
+    RotateBackBuffers();
+    return status >= 0 && status != VK_NOT_READY;
+  }
+
+
+  HRESULT D3D9SwapChainEx::PresentImageWithoutFlip(
+          double              FrameRate,
+          bool                DoNotWait) {
+    uint64_t frameId = m_wctx->frameId + 1u;
+    uint64_t waitFrameId = frameId - GetActualFrameLatency();
+
+    if (DoNotWait && m_wctx->frameLatencySignal->value() < waitFrameId)
+      return D3DERR_WASSTILLDRAWING;
+
+    // Close an auto-tracking range opened by the preceding visible frame.
+    // A present without a flip does not create or report latency timings.
+    m_parent->EndFrame(m_latencyTracker);
+    m_parent->Flush();
+
+    m_wctx->presenter->setFrameRateLimit(
+      FrameRate > 0.0 ? FrameRate : 0.0, GetActualFrameLatency());
+    m_wctx->frameId = frameId;
+
+    m_parent->EmitCs([
+      cDevice    = m_device,
+      cPresenter = m_wctx->presenter,
+      cFrameId   = frameId
+    ] (DxvkContext*) {
+      cDevice->discardPresent(cPresenter, cFrameId);
+    });
+
+    m_parent->FlushCsChunk();
+
+    if (m_latencyTracker)
+      m_latencyTracker->discardTimings();
+
+    SyncFrameLatency();
+
+    RotateBackBuffers();
+
+    return D3D_OK;
+  }
+
+
+  void D3D9SwapChainEx::RotateBackBuffers() {
     // Rotate swap chain buffers so that the back
     // buffer at index 0 becomes the front buffer.
     uint32_t rotatingBufferCount = m_backBuffers.size();
@@ -1136,6 +1223,20 @@ namespace dxvk {
       m_wctx->presenter->setFrameRateLimit(frameRate, GetActualFrameLatency());
       m_targetFrameRate = frameRate;
     }
+  }
+
+
+  double D3D9SwapChainEx::GetDiscardFrameRate(uint32_t SyncInterval) const {
+    double frameRate = double(m_parent->GetOptions()->maxFrameRate);
+
+    if (SyncInterval && m_displayRefreshRate > 0.0) {
+      double syncRate = m_displayRefreshRate / double(SyncInterval);
+
+      if (frameRate <= 0.0 || frameRate > syncRate)
+        frameRate = syncRate;
+    }
+
+    return frameRate;
   }
 
 

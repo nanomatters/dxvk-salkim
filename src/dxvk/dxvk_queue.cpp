@@ -149,8 +149,8 @@ namespace dxvk {
         entry = std::move(m_submitQueue.front());
       }
 
-      // Submit command buffer to device
       if (m_lastError != VK_ERROR_DEVICE_LOST) {
+        // Submit command buffer to device.
         std::lock_guard<dxvk::mutex> lock(m_mutexQueue);
 
         if (m_callback)
@@ -167,6 +167,8 @@ namespace dxvk {
           entry.result = entry.submit.cmdList->submit(
             m_semaphores, m_timelines, trackedSubmitId);
           entry.timelines = m_timelines;
+        } else if (entry.present.presenter != nullptr && entry.present.discard) {
+          entry.result = VK_SUCCESS;
         } else if (entry.present.presenter != nullptr) {
           if (entry.latency.tracker)
             entry.latency.tracker->notifyQueuePresentBegin(entry.latency.frameId);
@@ -280,6 +282,10 @@ namespace dxvk {
           if (status != VK_ERROR_DEVICE_LOST)
             m_device->waitForIdle();
         }
+      } else if (entry.present.presenter != nullptr && entry.present.discard) {
+        entry.present.presenter->completeFrame(
+          entry.present.frameId);
+        entry.present.presenter = nullptr;
       } else if (entry.present.presenter != nullptr) {
         // Signal the frame and then immediately destroy the reference.
         // This is necessary since the front-end may want to explicitly
