@@ -63,7 +63,7 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `systeminfo`: Displays the CPU, Proton build, and window system.
 - `cpu`: Displays all available CPU information and telemetry.
 - `cpu.name`: Displays the CPU model.
-- `cpu.power`: Displays CPU package power draw and the current power limit in watts.
+- `cpu.power`: Displays CPU package power draw and, when available, the current power limit in watts.
 - `cpu.temp`: Displays CPU package temperature.
 - `cpu.load`: Displays aggregate CPU utilization.
 - `cpu.clock`: Displays the average current and maximum CPU clock.
