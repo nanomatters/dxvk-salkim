@@ -202,9 +202,11 @@ namespace dxvk::hud {
     std::vector<std::string>                      m_itemNames;
     std::vector<Rc<HudItem>>                      m_items;
     std::vector<size_t>                           m_itemLines;
+    std::vector<bool>                             m_itemBottom;
     HudOptions                                    m_renderOptions;
     int64_t                                       m_fpsLowsWindowNs = 7'000'000'000;
     bool                                          m_hasNewline = false;
+    bool                                          m_splitBottom = false;
     bool                                          m_itemsOrdered = false;
 
     static void parseOption(const std::string& str, float& value);
