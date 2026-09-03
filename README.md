@@ -116,6 +116,9 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 For example, `DXVK_HUD=devinfo,fps,newline,fps_lows,horizontal` places
 device information and FPS on the first row and low frame rates on the second.
 HUD elements are displayed in the order in which they are listed.
+Prefix an item with `-` to exclude it from a group or from `full`. Exclusions
+take precedence regardless of token order. For example,
+`DXVK_HUD=gpu,-gpu.name` displays all GPU telemetry except the device name.
 Reflex marker timestamps are displayed relative to the simulation start marker.
 Presentation pipeline timings require `VK_EXT_present_timing`. PresentComplete
 uses first pixel visible when available, then first pixel out or request dequeued.
