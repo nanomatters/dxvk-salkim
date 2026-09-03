@@ -124,6 +124,7 @@ namespace dxvk {
       pushFrame(PresenterFrame());
       m_frameThread.join();
     }
+
   }
 
 
@@ -429,11 +430,36 @@ namespace dxvk {
 
     { std::unique_lock lock(m_frameMutex);
 
-      m_lastSignaled = frameId;
+      m_lastSignaled = std::max(m_lastSignaled, frameId);
       canSignal = m_lastCompleted >= frameId;
     }
 
     if (canSignal)
+      signalFrameValue(frameId);
+  }
+
+
+  void Presenter::completeFrame(
+          uint64_t                frameId) {
+    if (!m_signal || !frameId)
+      return;
+
+    // Once a flip-model present has made this BLT update non-visible, waiting
+    // for an older WSI presentation would preserve an ordering Windows ignores.
+    std::lock_guard pacingLock(m_pacingMutex);
+    m_fpsLimiter.delay();
+    signalFrameValue(frameId);
+  }
+
+
+  void Presenter::signalFrameValue(
+          uint64_t                frameId) {
+    if (!m_signal || !frameId)
+      return;
+
+    std::lock_guard lock(m_signalMutex);
+
+    if (frameId > m_signal->value())
       m_signal->signal(frameId);
   }
 
@@ -2391,6 +2417,7 @@ namespace dxvk {
           m_frameQueuePopId += 1u;
           return;
         }
+
       }
 
       // If the present operation has succeeded, actually wait for it to complete.
@@ -2423,18 +2450,21 @@ namespace dxvk {
           Logger::err(str::format("Presenter: vkWaitForPresentKHR failed: ", vr));
       }
 
-      // Signal latency tracker right away to get more accurate
-      // measurements if the frame rate limiter is enabled.
-      if (frame.tracker) {
-        frame.tracker->notifyGpuPresentEnd(frame.frameId);
-        frame.tracker = nullptr;
-      }
+      {
+        std::lock_guard pacingLock(m_pacingMutex);
 
-      // Apply FPS limiter here to align it as closely with scanout as we can,
-      // and delay signaling the frame latency event to emulate behaviour of a
-      // low refresh rate display as closely as we can.
-      if (!waited)
-        m_fpsLimiter.delay();
+        // A discarded BLT frame may already have advanced the signal past an
+        // obsolete WSI wait. Do not account or pace that old frame afterward.
+        if (frame.frameId > m_signal->value()) {
+          if (frame.tracker) {
+            frame.tracker->notifyGpuPresentEnd(frame.frameId);
+            frame.tracker = nullptr;
+          }
+
+          if (!waited)
+            m_fpsLimiter.delay();
+        }
+      }
 
       // Wake up any thread that may be waiting for the queue to become empty
       bool canSignal = false;
@@ -2443,14 +2473,14 @@ namespace dxvk {
         m_frameQueuePopId += 1u;
         m_frameDrain.notify_one();
 
-        m_lastCompleted = frame.frameId;
+        m_lastCompleted = std::max(m_lastCompleted, frame.frameId);
         canSignal = m_lastSignaled >= frame.frameId;
       }
 
       // Always signal even on error, since failures here
       // are transparent to the front-end.
       if (canSignal)
-        m_signal->signal(frame.frameId);
+        signalFrameValue(frame.frameId);
     }
   }
 
