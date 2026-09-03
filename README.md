@@ -111,10 +111,13 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `horizontal`: Places text-based HUD items in one horizontal row.
 - `newline`: Starts a new row at this point in a horizontal layout.
 - `center`: Centers text-based HUD items horizontally.
-- `bottom`: Places text-based HUD items along the bottom edge.
+- `bottom`: Places text-based HUD items after this token along the bottom edge.
 
 For example, `DXVK_HUD=devinfo,fps,newline,fps_lows,horizontal` places
 device information and FPS on the first row and low frame rates on the second.
+When text-based items occur on both sides of `bottom`, the token splits them
+between the top and bottom edges. At the beginning or end, it retains its
+original behavior and places all text-based items along the bottom edge.
 HUD elements are displayed in the order in which they are listed.
 Prefix an item with `-` to exclude it from a group or from `full`. Exclusions
 take precedence regardless of token order. For example,
