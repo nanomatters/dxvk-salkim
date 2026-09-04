@@ -943,7 +943,7 @@ namespace dxvk {
         cFrameId        = m_wctx->frameId
       ] (DxvkContext* ctx) {
         if (cHud)
-          cHud->update(*cPresenter);
+          cHud->update(*cPresenter, cColorSpace);
 
         // Update back buffer color space as necessary
         if (cSrcView->image()->info().colorSpace != cColorSpace) {

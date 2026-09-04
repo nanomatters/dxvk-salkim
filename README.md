@@ -69,7 +69,7 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `cpu.clock`: Displays the average current and maximum CPU clock.
 - `proton`: Displays the Proton build.
 - `wine`: Displays the Wine version and build.
-- `winsys`: Displays the window system.
+- `winsys`: Displays the window system, active HDR color space, and direct scanout status when available.
 - `fps`: Shows the current frame rate.
 - `fps_lows`: Shows 1% and 0.1% low frame rates over the preceding seven seconds.
 - `reflex`: Shows all available values from the newest completed Reflex latency report.

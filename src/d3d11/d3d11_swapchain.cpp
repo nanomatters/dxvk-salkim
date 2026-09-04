@@ -540,7 +540,7 @@ namespace dxvk {
       cDstRect        = dstRect
     ] (DxvkContext* ctx) {
       if (cHud)
-        cHud->update(*cPresenter);
+        cHud->update(*cPresenter, cColorSpace);
 
       // Update back buffer color space as necessary
       if (cSwapImage->image()->info().colorSpace != cColorSpace) {
