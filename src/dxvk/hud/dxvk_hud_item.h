@@ -21,6 +21,8 @@ namespace dxvk {
 
 namespace dxvk::hud {
 
+  class HudSystemInfoItem;
+
   /**
    * \brief HUD item
    *
@@ -111,7 +113,7 @@ namespace dxvk::hud {
       return m_fpsLowsWindowNs;
     }
 
-    void addSystemInfoItems();
+    Rc<HudSystemInfoItem> addSystemInfoItems();
 
     void addGpuTelemetryItems(
       const Rc<DxvkAdapter>&         adapter);
@@ -489,6 +491,12 @@ namespace dxvk::hud {
   /**
    * \brief HUD item to display system information
    */
+  enum class HudPresentationColorSpace {
+    Sdr,
+    Hdr10,
+    ScRgb,
+  };
+
   class HudSystemInfoItem : public HudItem {
 
   public:
@@ -503,6 +511,10 @@ namespace dxvk::hud {
     };
 
     HudSystemInfoItem(uint32_t fields);
+
+    void setPresentationStatus(
+            HudPresentationColorSpace colorSpace,
+            bool                      directScanout);
 
     HudPos render(
       const Rc<DxvkCommandList>&ctx,
@@ -519,6 +531,8 @@ namespace dxvk::hud {
     };
 
     std::vector<Line> m_lines;
+    std::string       m_displayBackend;
+    size_t            m_displayLine = ~size_t(0);
 
   };
 

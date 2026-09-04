@@ -6,6 +6,7 @@
 #include <array>
 
 #include "../dxvk/hud/dxvk_hud_font.h"
+#include "../dxvk/hud/dxvk_hud_info.h"
 
 namespace dxvk {
 
@@ -60,7 +61,7 @@ namespace dxvk {
     m_hudItems.add<hud::HudVersionItem>("version", -1);
     m_hudItems.add<hud::HudDeviceInfoItem>("devinfo", -1,
       std::move(deviceName), std::string(), std::string());
-    m_hudItems.addSystemInfoItems();
+    m_systemInfo = m_hudItems.addSystemInfoItems();
     m_hudItems.addCpuTelemetryItems(adapter);
     m_hudItems.addGpuTelemetryItems(adapter);
     m_hudItems.add<hud::HudFpsItem>("fps", -1);
@@ -83,9 +84,25 @@ namespace dxvk {
   void DxgiHud::render(
           IDXGIVkSwapChainHud*     presenter,
           uint32_t                 surfaceWidth,
-          uint32_t                 surfaceHeight) {
+          uint32_t                 surfaceHeight,
+          DXGI_COLOR_SPACE_TYPE    colorSpace) {
     if (m_failed)
       return;
+
+    auto now = dxvk::high_resolution_clock::now();
+
+    if (m_systemInfo && now >= m_nextPresentationUpdate) {
+      hud::HudPresentationColorSpace hudColorSpace = hud::HudPresentationColorSpace::Sdr;
+      if (colorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
+        hudColorSpace = hud::HudPresentationColorSpace::Hdr10;
+      else if (colorSpace == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)
+        hudColorSpace = hud::HudPresentationColorSpace::ScRgb;
+
+      bool directScanout = hud::queryWineDisplayFeedback()
+        & hud::WineDisplayFeedbackDirectScanout;
+      m_systemInfo->setPresentationStatus(hudColorSpace, directScanout);
+      m_nextPresentationUpdate = now + std::chrono::seconds(1);
+    }
 
     m_hudItems.update();
     m_vertices.clear();
