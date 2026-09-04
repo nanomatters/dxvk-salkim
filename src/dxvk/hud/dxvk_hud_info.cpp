@@ -81,18 +81,8 @@ namespace dxvk::hud {
     }
 
 
-    std::string queryDisplayBackend() {
-      HMODULE win32u = ::GetModuleHandleW(L"win32u.dll");
-      if (!win32u)
-        return std::string();
-
-      using GetBackendProc = WineDisplayBackend (WINAPI*)();
-      auto getBackend = reinterpret_cast<GetBackendProc>(
-        ::GetProcAddress(win32u, "__wine_get_display_backend"));
-      if (!getBackend)
-        return std::string();
-
-      switch (getBackend()) {
+    std::string displayBackendName(uint32_t feedback) {
+      switch (WineDisplayBackend(feedback & WineDisplayBackendMask)) {
         case WineDisplayBackend::Wayland: return "Wayland";
         case WineDisplayBackend::X11: return "X11";
         case WineDisplayBackend::Xwayland: return "Xwayland";
@@ -104,12 +94,31 @@ namespace dxvk::hud {
   }
 
 
+  uint32_t queryWineDisplayFeedback() {
+#ifdef _WIN32
+    using GetFeedbackProc = uint32_t (WINAPI*)();
+
+    static const auto getFeedback = [] {
+      HMODULE win32u = ::GetModuleHandleW(L"win32u.dll");
+      return win32u
+        ? reinterpret_cast<GetFeedbackProc>(
+            ::GetProcAddress(win32u, "__wine_get_display_backend"))
+        : nullptr;
+    }();
+
+    return getFeedback ? getFeedback() : 0u;
+#else
+    return 0u;
+#endif
+  }
+
+
   HudSystemInfo::HudSystemInfo()
   : protonBuild(trim(env::getEnvVar("PROTON_BUILD_NAME"))) {
 #ifdef _WIN32
     cpuName = queryCpuName();
     queryWineVersion(wineVersion, wineBuild);
-    displayBackend = queryDisplayBackend();
+    displayBackend = displayBackendName(queryWineDisplayFeedback());
 #endif
   }
 
