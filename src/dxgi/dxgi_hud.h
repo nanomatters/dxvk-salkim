@@ -26,7 +26,8 @@ namespace dxvk {
     void render(
             IDXGIVkSwapChainHud*     presenter,
             uint32_t                 surfaceWidth,
-            uint32_t                 surfaceHeight);
+            uint32_t                 surfaceHeight,
+            DXGI_COLOR_SPACE_TYPE    colorSpace);
 
   private:
 
@@ -41,7 +42,9 @@ namespace dxvk {
             int32_t                 fpsLowsWindow);
 
     hud::HudItemSet                  m_hudItems;
+    Rc<hud::HudSystemInfoItem>       m_systemInfo;
     std::vector<DXGI_VK_HUD_VERTEX> m_vertices;
+    dxvk::high_resolution_clock::time_point m_nextPresentationUpdate;
     bool                             m_failed = false;
 
     void drawText(
