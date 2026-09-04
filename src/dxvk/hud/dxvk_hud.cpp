@@ -1,4 +1,5 @@
 #include "dxvk_hud.h"
+#include "dxvk_hud_info.h"
 
 namespace dxvk::hud {
   
@@ -7,11 +8,12 @@ namespace dxvk::hud {
           ID3DLowLatencyDevice* lowLatencyDevice,
     const Rc<Presenter>&      presenter)
   : m_device        (device),
+    m_hasDxgiColorSpace(presenter != nullptr),
     m_renderer      (device),
     m_hudItems      (device) {
     addItem<HudVersionItem>("version", -1);
     addItem<HudDeviceInfoItem>("devinfo", -1, m_device);
-    m_hudItems.addSystemInfoItems();
+    m_systemInfo = m_hudItems.addSystemInfoItems();
     m_hudItems.addCpuTelemetryItems(device->adapter());
     m_hudItems.addGpuTelemetryItems(device->adapter());
     addItem<HudFpsItem>("fps", -1);
@@ -37,7 +39,25 @@ namespace dxvk::hud {
   }
 
 
-  void Hud::update() {
+  void Hud::update(VkColorSpaceKHR colorSpace) {
+    auto now = dxvk::high_resolution_clock::now();
+
+    if (m_systemInfo && now >= m_nextPresentationUpdate) {
+      bool directScanout = queryWineDisplayFeedback()
+        & WineDisplayFeedbackDirectScanout;
+
+      HudPresentationColorSpace hudColorSpace = HudPresentationColorSpace::Sdr;
+      if (m_hasDxgiColorSpace) {
+        if (colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT)
+          hudColorSpace = HudPresentationColorSpace::Hdr10;
+        else if (colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT)
+          hudColorSpace = HudPresentationColorSpace::ScRgb;
+      }
+
+      m_systemInfo->setPresentationStatus(hudColorSpace, directScanout);
+      m_nextPresentationUpdate = now + std::chrono::seconds(1);
+    }
+
     m_hudItems.update();
   }
 

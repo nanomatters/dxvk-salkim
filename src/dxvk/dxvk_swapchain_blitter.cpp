@@ -42,7 +42,7 @@ namespace dxvk {
 
     // Update HUD, if we have one
     if (m_hud)
-      m_hud->update();
+      m_hud->update(dstView->image()->info().colorSpace);
 
     // Fix up default present areas if necessary
     if (!dstRect.extent.width || !dstRect.extent.height) {
