@@ -30,7 +30,8 @@ namespace dxvk::hud {
      * Updates the data to display.
      * Should be called once per frame.
      */
-    void update();
+    void update(
+            VkColorSpaceKHR       colorSpace);
 
     /**
      * \brief Render HUD
@@ -79,9 +80,12 @@ namespace dxvk::hud {
   private:
     
     Rc<DxvkDevice>        m_device;
+    bool                  m_hasDxgiColorSpace;
     
     HudVulkanRenderer     m_renderer;
     HudItemSet            m_hudItems;
+    Rc<HudSystemInfoItem> m_systemInfo;
+    dxvk::high_resolution_clock::time_point m_nextPresentationUpdate;
     
   };
   
