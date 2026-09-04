@@ -403,7 +403,7 @@ namespace dxvk {
       std::lock_guard<dxvk::mutex> lockBuf(m_lockBuffer);
 
       if (m_hud && !(PresentFlags & DXGI_PRESENT_TEST))
-        m_hud->render(m_presenterHud.ptr(), m_desc.Width, m_desc.Height);
+        m_hud->render(m_presenterHud.ptr(), m_desc.Width, m_desc.Height, m_colorSpace);
 
       hr = m_presenter->Present(SyncInterval, PresentFlags, pPresentParameters);
 

@@ -469,7 +469,9 @@ namespace dxvk::hud {
   }
 
 
-  void HudItemSet::addSystemInfoItems() {
+  Rc<HudSystemInfoItem> HudItemSet::addSystemInfoItems() {
+    Rc<HudSystemInfoItem> displayItem;
+
     if (m_enableFull && !isDisabled("systeminfo")) {
       uint32_t fields = HudSystemInfoItem::All;
 
@@ -480,8 +482,11 @@ namespace dxvk::hud {
       if (isDisabled("winsys"))
         fields &= ~HudSystemInfoItem::Display;
 
-      if (fields)
-        add<HudSystemInfoItem>("systeminfo", -1, fields);
+      if (fields) {
+        auto item = add<HudSystemInfoItem>("systeminfo", -1, fields);
+        if (fields & HudSystemInfoItem::Display)
+          displayItem = std::move(item);
+      }
     } else if (isEnabled("systeminfo")) {
       uint32_t fields = HudSystemInfoItem::System;
 
@@ -490,14 +495,19 @@ namespace dxvk::hud {
       if (isDisabled("winsys"))
         fields &= ~HudSystemInfoItem::Display;
 
-      if (fields)
-        add<HudSystemInfoItem>("systeminfo", -1, fields);
+      if (fields) {
+        auto item = add<HudSystemInfoItem>("systeminfo", -1, fields);
+        if (fields & HudSystemInfoItem::Display)
+          displayItem = std::move(item);
+      }
       add<HudSystemInfoItem>("wine", -1, HudSystemInfoItem::Wine);
     } else {
       add<HudSystemInfoItem>("proton", -1, HudSystemInfoItem::Proton);
       add<HudSystemInfoItem>("wine", -1, HudSystemInfoItem::Wine);
-      add<HudSystemInfoItem>("winsys", -1, HudSystemInfoItem::Display);
+      displayItem = add<HudSystemInfoItem>("winsys", -1, HudSystemInfoItem::Display);
     }
+
+    return displayItem;
   }
 
 
@@ -1435,8 +1445,31 @@ namespace dxvk::hud {
       m_lines.push_back({ "Wine: ", std::move(wine) });
     }
 
-    if ((fields & Display) && !info.displayBackend.empty())
-      m_lines.push_back({ "Window system: ", info.displayBackend });
+    if ((fields & Display) && !info.displayBackend.empty()) {
+      m_displayBackend = info.displayBackend;
+      m_displayLine = m_lines.size();
+      m_lines.push_back({ "Window system: ", m_displayBackend });
+    }
+  }
+
+
+  void HudSystemInfoItem::setPresentationStatus(
+          HudPresentationColorSpace colorSpace,
+          bool                      directScanout) {
+    if (m_displayLine >= m_lines.size())
+      return;
+
+    std::string value = m_displayBackend;
+
+    if (colorSpace == HudPresentationColorSpace::Hdr10)
+      value += " | HDR10";
+    else if (colorSpace == HudPresentationColorSpace::ScRgb)
+      value += " | scRGB";
+
+    if (directScanout)
+      value += " | DSO";
+
+    m_lines[m_displayLine].value = std::move(value);
   }
 
 
