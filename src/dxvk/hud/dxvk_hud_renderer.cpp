@@ -18,7 +18,7 @@ namespace dxvk::hud {
   struct HudFontGpuData {
     float size;
     float advance;
-    uint32_t padding[2];
+    float solidUv[2];
     HudGlyphGpuData glyphs[256];
   };
 
@@ -36,6 +36,30 @@ namespace dxvk::hud {
           std::string_view    text) const {
     return uint32_t((uint64_t(size) * g_hudFont.advance * text.size()
       + g_hudFont.size - 1u) / g_hudFont.size);
+  }
+
+
+  HudTextBounds HudRenderer::textBounds(
+          uint32_t            size,
+          HudPos              pos,
+          std::string_view    text) const {
+    // Conservative glyph extents, computed once instead of scanning text
+    // every frame. Include the SDF border so shadows fit inside the panel.
+    static const HudTextBounds glyphBounds = [] {
+      HudTextBounds bounds = { };
+      for (uint32_t i = 0; i < g_hudFont.charCount; i++) {
+        const auto& glyph = g_hudFont.glyphs[i];
+        bounds.left = std::min(bounds.left, float(-glyph.originX));
+        bounds.top = std::min(bounds.top, float(-glyph.originY));
+        bounds.right = std::max(bounds.right, float(glyph.w - glyph.originX));
+        bounds.bottom = std::max(bounds.bottom, float(glyph.h - glyph.originY));
+      }
+      return bounds;
+    }();
+    float factor = float(size) / float(g_hudFont.size);
+    float advance = float(g_hudFont.advance) * float(text.empty() ? 0 : text.size() - 1);
+    return { pos.x + factor * glyphBounds.left, pos.y + factor * glyphBounds.top,
+      pos.x + factor * (advance + glyphBounds.right), pos.y + factor * glyphBounds.bottom };
   }
 
 
@@ -121,6 +145,23 @@ namespace dxvk::hud {
   }
 
 
+  void HudVulkanRenderer::drawRect(HudPos pos, HudPos size, uint32_t color) {
+    if (size.x <= 0 || size.y <= 0 || !(color >> 24))
+      return;
+
+    // Size zero selects a rectangle in the existing text vertex shader.
+    // Its dimensions occupy the otherwise unused text offset field.
+    auto& draw = m_textDraws.emplace_back();
+    draw.textOffset = uint32_t(std::min(size.x, 32767))
+      | (uint32_t(std::min(size.y, 32767)) << 16);
+    draw.textLength = 1;
+    draw.fontSize = 0;
+    draw.posX = pos.x;
+    draw.posY = pos.y;
+    draw.color = color;
+  }
+
+
   void HudVulkanRenderer::flushDraws(
     const Rc<DxvkCommandList>&ctx,
     const Rc<DxvkImageView>&  dstView,
@@ -173,7 +214,8 @@ namespace dxvk::hud {
     }
 
     // Upload aligned text data in such a way that we write full cache lines
-    std::memcpy(m_textBuffer->mapPtr(0), m_textData.data(), textSizeAligned);
+    if (textSizeAligned)
+      std::memcpy(m_textBuffer->mapPtr(0), m_textData.data(), textSizeAligned);
 
     // Upload draw parameters and pad aligned region with zeroes
     size_t drawInfoCopySize = m_textDraws.size() * sizeof(HudTextDrawInfo);
@@ -365,6 +407,8 @@ namespace dxvk::hud {
     HudFontGpuData glyphData = { };
     glyphData.size = float(g_hudFont.size);
     glyphData.advance = float(g_hudFont.advance);
+    glyphData.solidUv[0] = float(g_hudFont.width) - 3.5f;
+    glyphData.solidUv[1] = float(g_hudFont.height) - 3.5f;
 
     for (size_t i = 0; i < g_hudFont.charCount; i++) {
       auto& src = g_hudFont.glyphs[i];

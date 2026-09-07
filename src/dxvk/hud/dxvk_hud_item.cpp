@@ -249,6 +249,9 @@ namespace dxvk::hud {
           m_draws.push_back({ size, position, color, std::string(text), m_line, m_bottom });
       }
 
+      // Panels are emitted to the real renderer after laying out the text.
+      void drawRect(HudPos, HudPos, uint32_t) override { }
+
       void setLine(size_t line) {
         m_line = line;
       }
@@ -263,7 +266,8 @@ namespace dxvk::hud {
               uint32_t            surfaceHeight,
               float               scale,
               bool                horizontal,
-              bool                center) const {
+              bool                center,
+              float               backgroundOpacity) {
         if (m_draws.empty())
           return;
 
@@ -283,10 +287,17 @@ namespace dxvk::hud {
               && m_draws[end].bottom == m_draws[first].bottom)
             end += 1;
 
-          replayRange(renderer, horizontal, center,
+          layoutRange(horizontal, center,
             haveWidth, logicalWidth, haveHeight, logicalHeight, first, end);
+
+          if (backgroundOpacity > 0.0f && haveWidth && haveHeight)
+            drawBackground(renderer, first, end, logicalWidth, logicalHeight, backgroundOpacity);
           first = end;
         }
+
+        // All panels precede all text, even if the top and bottom overlap.
+        for (const auto& draw : m_draws)
+          renderer.drawText(draw.size, draw.position, draw.color, draw.text);
       }
 
     private:
@@ -304,8 +315,7 @@ namespace dxvk::hud {
       size_t m_line = 0;
       bool m_bottom = false;
 
-      void replayRange(
-              HudRenderer&        renderer,
+      void layoutRange(
               bool                horizontal,
               bool                center,
               bool                haveWidth,
@@ -313,7 +323,7 @@ namespace dxvk::hud {
               bool                haveHeight,
               int64_t             logicalHeight,
               size_t              drawFirst,
-              size_t              drawEnd) const {
+              size_t              drawEnd) {
         constexpr int64_t gap = 24;
         bool bottom = m_draws[drawFirst].bottom;
 
@@ -338,7 +348,7 @@ namespace dxvk::hud {
             : 0;
 
           for (size_t i = drawFirst; i < drawEnd; i++) {
-            const auto& draw = m_draws[i];
+            auto& draw = m_draws[i];
             int64_t drawX = x + int64_t(draw.position.x) - left;
             int64_t drawY = int64_t(draw.position.y) + yOffset;
             HudPos position = {
@@ -350,7 +360,7 @@ namespace dxvk::hud {
                 int64_t(std::numeric_limits<int32_t>::max()))),
             };
 
-            renderer.drawText(draw.size, position, draw.color, draw.text);
+            draw.position = position;
           }
 
           return;
@@ -393,8 +403,7 @@ namespace dxvk::hud {
                   int64_t(std::numeric_limits<int32_t>::max()))),
               };
 
-              renderer.drawText(m_draws[j].size, position,
-                m_draws[j].color, m_draws[j].text);
+              m_draws[j].position = position;
             }
 
             x += right - left + gap;
@@ -407,6 +416,31 @@ namespace dxvk::hud {
 
       int64_t getTextWidth(const Draw& draw) const {
         return textWidth(draw.size, draw.text);
+      }
+
+      void drawBackground(HudRenderer& renderer, size_t first, size_t end,
+                          int64_t width, int64_t height, float opacity) const {
+        const auto& firstDraw = m_draws[first];
+        auto bounds = textBounds(firstDraw.size, firstDraw.position, firstDraw.text);
+        for (size_t i = first + 1; i < end; i++) {
+          const auto& draw = m_draws[i];
+          auto box = textBounds(draw.size, draw.position, draw.text);
+          bounds.left = std::min(bounds.left, box.left);
+          bounds.top = std::min(bounds.top, box.top);
+          bounds.right = std::max(bounds.right, box.right);
+          bounds.bottom = std::max(bounds.bottom, box.bottom);
+        }
+
+        // Six logical pixels of padding, clipped to the viewport and the
+        // signed 16-bit coordinates used by the Vulkan HUD draw records.
+        double maxX = double(std::min<int64_t>(width, 32767));
+        double maxY = double(std::min<int64_t>(height, 32767));
+        int32_t left = int32_t(std::clamp(std::floor(double(bounds.left)) - 6, 0.0, maxX));
+        int32_t top = int32_t(std::clamp(std::floor(double(bounds.top)) - 6, 0.0, maxY));
+        int32_t right = int32_t(std::clamp(std::ceil(double(bounds.right)) + 6, 0.0, maxX));
+        int32_t bottom = int32_t(std::clamp(std::ceil(double(bounds.bottom)) + 6, 0.0, maxY));
+        uint32_t color = uint32_t(std::lround(opacity * 255.0f)) << 24;
+        renderer.drawRect({ left, top }, { right - left, bottom - top }, color);
       }
 
       size_t getLineBounds(
@@ -502,6 +536,9 @@ namespace dxvk::hud {
       getOption<float>("scale", 1.0f), 0.25f, 4.0f);
     m_renderOptions.opacity = std::clamp(
       getOption<float>("opacity", 1.0f), 0.1f, 1.0f);
+    float background = getOption<float>("background", 0.45f);
+    m_renderOptions.backgroundOpacity = std::isfinite(background)
+      ? std::clamp(background, 0.0f, 1.0f) : 0.45f;
     m_renderOptions.horizontal = isExplicitlyEnabled("horizontal");
     m_renderOptions.center = isExplicitlyEnabled("center");
     m_renderOptions.bottom = isExplicitlyEnabled("bottom");
@@ -1115,7 +1152,8 @@ namespace dxvk::hud {
             uint32_t            surfaceHeight) {
     orderItems();
 
-    if (!options.horizontal && !options.center && !options.bottom) {
+    if (!options.horizontal && !options.center && !options.bottom
+     && options.backgroundOpacity <= 0.0f) {
       HudPos position = { 8, 8 };
 
       for (const auto& item : m_items)
@@ -1158,7 +1196,7 @@ namespace dxvk::hud {
     }
 
     layout.replay(renderer, surfaceWidth, surfaceHeight, options.scale,
-      options.horizontal, options.center);
+      options.horizontal, options.center, options.backgroundOpacity);
     position = { 8, 8 };
 
     for (const auto& item : m_items) {

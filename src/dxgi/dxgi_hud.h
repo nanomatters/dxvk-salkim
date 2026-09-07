@@ -53,6 +53,11 @@ namespace dxvk {
             uint32_t                color,
             std::string_view        text) override;
 
+    void drawRect(
+            hud::HudPos             position,
+            hud::HudPos             size,
+            uint32_t                color) override;
+
   };
 
 }
