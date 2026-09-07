@@ -18,6 +18,7 @@ namespace dxvk::hud {
   struct HudOptions {
     float scale = 1.0f;
     float opacity = 1.0f;
+    float backgroundOpacity = 0.45f;
     bool horizontal = false;
     bool center = false;
     bool bottom = false;
@@ -33,6 +34,10 @@ namespace dxvk::hud {
   struct HudPos {
     int32_t x = 0;
     int32_t y = 0;
+  };
+
+  struct HudTextBounds {
+    float left, top, right, bottom;
   };
 
 
@@ -96,6 +101,16 @@ namespace dxvk::hud {
             uint32_t            size,
             std::string_view    text) const;
 
+    HudTextBounds textBounds(
+            uint32_t            size,
+            HudPos              pos,
+            std::string_view    text) const;
+
+    virtual void drawRect(
+            HudPos              pos,
+            HudPos              size,
+            uint32_t            color) = 0;
+
     virtual void drawText(
             uint32_t            size,
             HudPos              pos,
@@ -126,6 +141,11 @@ namespace dxvk::hud {
 
     void endFrame(
       const Rc<DxvkCommandList>&ctx);
+
+    void drawRect(
+            HudPos              pos,
+            HudPos              size,
+            uint32_t            color) override;
 
     void drawText(
             uint32_t            size,
