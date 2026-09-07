@@ -374,6 +374,8 @@ namespace dxvk::hud {
   struct HudTelemetryMetricInfo {
     const char* option;
     const char* label;
+    bool hasUnits = true;
+    uint32_t fontSize = HudFontSize;
   };
 
 

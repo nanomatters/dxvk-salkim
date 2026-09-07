@@ -4,7 +4,13 @@
 
 #include "dxvk_hud_font.h"
 
+#include <string_view>
+
 namespace dxvk::hud {
+
+  constexpr uint32_t HudFontSize = 20;
+  constexpr uint32_t HudSmallFontSize = 14;
+  constexpr int32_t HudLineHeight = HudFontSize + 4;
 
   /**
    * \brief HUD options
@@ -88,13 +94,13 @@ namespace dxvk::hud {
 
     uint32_t textWidth(
             uint32_t            size,
-      const std::string&        text) const;
+            std::string_view    text) const;
 
     virtual void drawText(
             uint32_t            size,
             HudPos              pos,
             uint32_t            color,
-      const std::string&        text) = 0;
+            std::string_view    text) = 0;
 
   };
 
@@ -125,7 +131,7 @@ namespace dxvk::hud {
             uint32_t            size,
             HudPos              pos,
             uint32_t            color,
-      const std::string&        text) override;
+            std::string_view    text) override;
 
     void drawTextIndirect(
       const Rc<DxvkCommandList>&ctx,
