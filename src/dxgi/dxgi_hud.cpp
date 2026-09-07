@@ -129,6 +129,29 @@ namespace dxvk {
   }
 
 
+  void DxgiHud::drawRect(hud::HudPos position, hud::HudPos size, uint32_t color) {
+    if (size.x <= 0 || size.y <= 0 || !(color >> 24) || MaxVertices - m_vertices.size() < 6)
+      return;
+
+    const auto& font = hud::g_hudFont;
+    float x0 = float(position.x), y0 = float(position.y);
+    float x1 = x0 + float(size.x), y1 = y0 + float(size.y);
+    float u0 = float(font.width) - 3.5f, v0 = float(font.height) - 3.5f;
+    float u1 = float(font.width) - 0.5f, v1 = float(font.height) - 0.5f;
+
+    // The existing D3D12 HUD renderer sees an ordinary textured quad.
+    const std::array<DXGI_VK_HUD_VERTEX, 6> quad = {{
+      { { x0, y0 }, { u0, v0 }, color, 0 },
+      { { x1, y0 }, { u1, v0 }, color, 0 },
+      { { x0, y1 }, { u0, v1 }, color, 0 },
+      { { x0, y1 }, { u0, v1 }, color, 0 },
+      { { x1, y0 }, { u1, v0 }, color, 0 },
+      { { x1, y1 }, { u1, v1 }, color, 0 },
+    }};
+    m_vertices.insert(m_vertices.end(), quad.begin(), quad.end());
+  }
+
+
   void DxgiHud::drawText(
           uint32_t                size,
           hud::HudPos             position,
