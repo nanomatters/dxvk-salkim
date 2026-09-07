@@ -63,8 +63,8 @@ namespace dxvk::hud {
 
     constexpr std::array<HudTelemetryMetricInfo,
       size_t(HudGpuTelemetryMetric::Count)> HudGpuTelemetryMetrics = {{
-      { "gpu.name",     "GPU:"          },
-      { "gpu.driver",   "GPU driver:"   },
+      { "gpu.name",     "GPU:",        false },
+      { "gpu.driver",   "GPU driver:", false, HudSmallFontSize },
       { "gpu.power",    "GPU power:"    },
       { "gpu.temp",     "GPU temp:"     },
       { "gpu.load",     "GPU load:"     },
@@ -77,7 +77,7 @@ namespace dxvk::hud {
 
     constexpr std::array<HudTelemetryMetricInfo,
       size_t(HudCpuTelemetryMetric::Count)> HudCpuTelemetryMetrics = {{
-      { "cpu.name",  "CPU:"       },
+      { "cpu.name",  "CPU:", false },
       { "cpu.power", "CPU power:" },
       { "cpu.temp",  "CPU temp:"  },
       { "cpu.load",  "CPU load:"  },
@@ -89,6 +89,51 @@ namespace dxvk::hud {
     constexpr uint32_t HudGpuTelemetryLabelColor = 0xff0060d0u;
     constexpr uint32_t HudCpuTelemetryLabelColor = 0xffff8040u;
     constexpr uint32_t HudTelemetryValueColor = 0xffffffffu;
+
+
+    // Keep units on the value's baseline. String views avoid allocating
+    // substrings; all runs still use the existing atlas and text batch.
+    void drawMetricValue(HudRenderer& renderer, HudPos position,
+                         uint32_t color, std::string_view text) {
+      auto draw = [&](uint32_t size, std::string_view part) {
+        if (!part.empty()) {
+          renderer.drawText(size, position, color, part);
+          position.x += int32_t(renderer.textWidth(size, part));
+        }
+      };
+
+      constexpr std::string_view letters =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ%";
+      size_t first = 0;
+
+      for (size_t pos = text.find_first_of(letters); pos != text.npos;) {
+        size_t end = text.find_first_not_of(letters, pos);
+        if (end == text.npos)
+          end = text.size();
+
+        auto unit = text.substr(pos, end - pos);
+        if (unit == "ms" || unit == "W" || unit == "C" || unit == "%"
+         || unit == "MHz" || unit == "MiB" || unit == "MB" || unit == "kB") {
+          draw(HudFontSize, text.substr(first, pos - first));
+          draw(HudSmallFontSize, unit);
+          first = end;
+        }
+        pos = text.find_first_of(letters, end);
+      }
+      draw(HudFontSize, text.substr(first));
+    }
+
+
+    void drawLabelValue(HudRenderer& renderer, HudPos position,
+                        const HudOptions& options, uint32_t color,
+                        std::string_view label, std::string_view value,
+                        std::string_view columnLabel) {
+      renderer.drawText(HudFontSize, position, color, label);
+      position.x += int32_t(renderer.textWidth(HudFontSize,
+        options.horizontal ? label : columnLabel)
+        + renderer.textWidth(HudFontSize, " "));
+      drawMetricValue(renderer, position, HudTelemetryValueColor, value);
+    }
 
 
     template<typename MetricInfo, size_t MetricCount>
@@ -127,13 +172,13 @@ namespace dxvk::hud {
 
     std::string formatNanoseconds(uint64_t durationNs) {
       return str::format(durationNs / 1'000'000, ".",
-        std::setfill('0'), std::setw(3), durationNs / 1'000 % 1'000, " ms");
+        std::setfill('0'), std::setw(3), durationNs / 1'000 % 1'000, "ms");
     }
 
 
     std::string formatReflexMicroseconds(uint64_t durationUs) {
       return str::format(durationUs / 1000, ".",
-        std::setfill('0'), std::setw(3), durationUs % 1000, " ms");
+        std::setfill('0'), std::setw(3), durationUs % 1000, "ms");
     }
 
 
@@ -199,9 +244,9 @@ namespace dxvk::hud {
               uint32_t            size,
               HudPos              position,
               uint32_t            color,
-        const std::string&        text) override {
+              std::string_view    text) override {
         if (!text.empty())
-          m_draws.push_back({ size, position, color, text, m_line, m_bottom });
+          m_draws.push_back({ size, position, color, std::string(text), m_line, m_bottom });
       }
 
       void setLine(size_t line) {
@@ -311,7 +356,7 @@ namespace dxvk::hud {
           return;
         }
 
-        constexpr int64_t lineHeight = 20;
+        constexpr int64_t lineHeight = HudLineHeight;
         size_t lastLine = m_draws[drawEnd - 1].line;
 
         for (size_t first = drawFirst; first < drawEnd;) {
@@ -331,7 +376,7 @@ namespace dxvk::hud {
           int64_t lineOffset = int64_t(bottom ? lastLine - line : line);
           int64_t y = bottom && haveHeight
             ? logicalHeight - 20 - lineOffset * lineHeight
-            : 24 + lineOffset * lineHeight;
+            : 8 + HudFontSize + lineOffset * lineHeight;
 
           for (size_t i = first; i < lineEnd;) {
             int64_t left, right;
@@ -788,14 +833,14 @@ namespace dxvk::hud {
     size_t end = m_metric == HudReflexMetric::Count
       ? HudReflexMetrics.size()
       : first + 1;
-    uint32_t spaceWidth = renderer.textWidth(16, " ");
+    uint32_t spaceWidth = renderer.textWidth(HudFontSize, " ");
     uint32_t valueOffset = spaceWidth;
 
     if (!options.horizontal) {
       for (size_t i = first; i < end; i++) {
         if (m_metricMask & (uint64_t(1) << i))
           valueOffset = std::max(valueOffset,
-            renderer.textWidth(16, HudReflexMetrics[i].label) + spaceWidth);
+            renderer.textWidth(HudFontSize, HudReflexMetrics[i].label) + spaceWidth);
       }
     }
 
@@ -806,13 +851,13 @@ namespace dxvk::hud {
         continue;
 
       uint32_t rowValueOffset = options.horizontal
-        ? renderer.textWidth(16, HudReflexMetrics[i].label) + spaceWidth
+        ? renderer.textWidth(HudFontSize, HudReflexMetrics[i].label) + spaceWidth
         : valueOffset;
 
-      position.y += firstRow ? 16 : 20;
-      renderer.drawText(16, position, HudReflexLabelColor,
+      position.y += firstRow ? HudFontSize : HudLineHeight;
+      renderer.drawText(HudFontSize, position, HudReflexLabelColor,
         HudReflexMetrics[i].label);
-      renderer.drawText(16, { position.x + int32_t(rowValueOffset), position.y },
+      drawMetricValue(renderer, { position.x + int32_t(rowValueOffset), position.y },
         HudTelemetryValueColor, m_data->value(HudReflexMetric(i)));
       firstRow = false;
     }
@@ -929,14 +974,14 @@ namespace dxvk::hud {
     size_t end = m_metric == HudPresentTelemetryMetric::Count
       ? HudPresentTelemetryMetrics.size()
       : first + 1;
-    uint32_t spaceWidth = renderer.textWidth(16, " ");
+    uint32_t spaceWidth = renderer.textWidth(HudFontSize, " ");
     uint32_t valueOffset = spaceWidth;
 
     if (!options.horizontal) {
       for (size_t i = first; i < end; i++) {
         if (m_metricMask & (uint64_t(1) << i))
           valueOffset = std::max(valueOffset,
-            renderer.textWidth(16, HudPresentTelemetryMetrics[i].label) + spaceWidth);
+            renderer.textWidth(HudFontSize, HudPresentTelemetryMetrics[i].label) + spaceWidth);
       }
     }
 
@@ -947,13 +992,13 @@ namespace dxvk::hud {
         continue;
 
       uint32_t rowValueOffset = options.horizontal
-        ? renderer.textWidth(16, HudPresentTelemetryMetrics[i].label) + spaceWidth
+        ? renderer.textWidth(HudFontSize, HudPresentTelemetryMetrics[i].label) + spaceWidth
         : valueOffset;
 
-      position.y += firstRow ? 16 : 20;
-      renderer.drawText(16, position, HudPresentTelemetryLabelColor,
+      position.y += firstRow ? HudFontSize : HudLineHeight;
+      renderer.drawText(HudFontSize, position, HudPresentTelemetryLabelColor,
         HudPresentTelemetryMetrics[i].label);
-      renderer.drawText(16, { position.x + int32_t(rowValueOffset), position.y },
+      drawMetricValue(renderer, { position.x + int32_t(rowValueOffset), position.y },
         HudTelemetryValueColor, m_data->value(HudPresentTelemetryMetric(i)));
       firstRow = false;
     }
@@ -1213,12 +1258,12 @@ namespace dxvk::hud {
 
       if (m_requested & D3DKMT_WINE_GPU_TELEMETRY_POWER)
         m_values[size_t(HudGpuTelemetryMetric::Power)] =
-          str::format(power, " / ", powerLimit, " W");
+          str::format(power, "W / ", powerLimit, "W");
 
       if (data.Valid & D3DKMT_WINE_GPU_TELEMETRY_TEMPERATURE) {
         m_values[size_t(HudGpuTelemetryMetric::Temperature)] =
           str::format(data.TemperatureDeciCelsius / 10, ".",
-          data.TemperatureDeciCelsius % 10, " C");
+          data.TemperatureDeciCelsius % 10, "C");
       }
 
       if (data.Valid & D3DKMT_WINE_GPU_TELEMETRY_UTILIZATION)
@@ -1227,17 +1272,17 @@ namespace dxvk::hud {
 
       if (data.Valid & D3DKMT_WINE_GPU_TELEMETRY_CLOCK)
         m_values[size_t(HudGpuTelemetryMetric::GraphicsClock)] =
-          str::format((uint64_t(data.GraphicsClockKHz) + 500) / 1000, " MHz");
+          str::format((uint64_t(data.GraphicsClockKHz) + 500) / 1000, "MHz");
 
       if (data.Valid & D3DKMT_WINE_GPU_TELEMETRY_MEMORY_CLOCK)
         m_values[size_t(HudGpuTelemetryMetric::MemoryClock)] =
-          str::format((uint64_t(data.MemoryClockKHz) + 500) / 1000, " MHz");
+          str::format((uint64_t(data.MemoryClockKHz) + 500) / 1000, "MHz");
 
       if (data.Valid & D3DKMT_WINE_GPU_TELEMETRY_VRAM) {
         uint64_t usedMiB = (data.VramUsedBytes + (1u << 19)) >> 20;
         uint64_t totalMiB = (data.VramTotalBytes + (1u << 19)) >> 20;
         m_values[size_t(HudGpuTelemetryMetric::Vram)] =
-          str::format(usedMiB, " / ", totalMiB, " MiB");
+          str::format(usedMiB, "MiB / ", totalMiB, "MiB");
       }
 
       if (data.Valid & D3DKMT_WINE_GPU_TELEMETRY_MEMORY_UTIL)
@@ -1325,16 +1370,16 @@ namespace dxvk::hud {
         if ((data.Valid & D3DKMT_WINE_CPU_TELEMETRY_POWER)
          && !(data.Valid & D3DKMT_WINE_CPU_TELEMETRY_POWER_LIMIT))
           m_values[size_t(HudCpuTelemetryMetric::Power)] =
-            str::format(power, " W");
+            str::format(power, "W");
         else
           m_values[size_t(HudCpuTelemetryMetric::Power)] =
-            str::format(power, " / ", powerLimit, " W");
+            str::format(power, "W / ", powerLimit, "W");
       }
 
       if (data.Valid & D3DKMT_WINE_CPU_TELEMETRY_TEMPERATURE) {
         m_values[size_t(HudCpuTelemetryMetric::Temperature)] =
           str::format(data.TemperatureDeciCelsius / 10, ".",
-          data.TemperatureDeciCelsius % 10, " C");
+          data.TemperatureDeciCelsius % 10, "C");
       }
 
       if (data.Valid & D3DKMT_WINE_CPU_TELEMETRY_UTILIZATION)
@@ -1347,10 +1392,10 @@ namespace dxvk::hud {
         if (data.MaximumClockKHz) {
           uint64_t maximum = (uint64_t(data.MaximumClockKHz) + 500) / 1000;
           m_values[size_t(HudCpuTelemetryMetric::Clock)] =
-            str::format(average, " / ", maximum, " MHz");
+            str::format(average, "MHz / ", maximum, "MHz");
         } else {
           m_values[size_t(HudCpuTelemetryMetric::Clock)] =
-            str::format(average, " MHz");
+            str::format(average, "MHz");
         }
       }
     } else if (status == D3DKMT_STATUS_NOT_IMPLEMENTED) {
@@ -1397,14 +1442,14 @@ namespace dxvk::hud {
     size_t end = m_metric == m_metricCount
       ? m_metricCount
       : first + 1;
-    uint32_t spaceWidth = renderer.textWidth(16, " ");
-    uint32_t valueOffset = spaceWidth;
+    uint32_t valueOffset = 0;
 
     if (!options.horizontal) {
       for (size_t i = first; i < end; i++) {
         if (m_metricMask & (uint64_t(1) << i))
           valueOffset = std::max(valueOffset,
-            renderer.textWidth(16, m_metrics[i].label) + spaceWidth);
+            renderer.textWidth(m_metrics[i].fontSize, m_metrics[i].label)
+            + renderer.textWidth(m_metrics[i].fontSize, " "));
       }
     }
 
@@ -1412,14 +1457,19 @@ namespace dxvk::hud {
       if (!(m_metricMask & (uint64_t(1) << i)))
         continue;
 
+      uint32_t fontSize = m_metrics[i].fontSize;
       uint32_t rowValueOffset = options.horizontal
-        ? renderer.textWidth(16, m_metrics[i].label) + spaceWidth
+        ? renderer.textWidth(fontSize, m_metrics[i].label)
+          + renderer.textWidth(fontSize, " ")
         : valueOffset;
 
-      position.y += 20;
-      renderer.drawText(16, position, m_labelColor, m_metrics[i].label);
-      renderer.drawText(16, { position.x + int32_t(rowValueOffset), position.y },
-        HudTelemetryValueColor, m_data->value(i));
+      position.y += fontSize + 4;
+      renderer.drawText(fontSize, position, m_labelColor, m_metrics[i].label);
+      HudPos valuePos = { position.x + int32_t(rowValueOffset), position.y };
+      if (m_metrics[i].hasUnits)
+        drawMetricValue(renderer, valuePos, HudTelemetryValueColor, m_data->value(i));
+      else
+        renderer.drawText(fontSize, valuePos, HudTelemetryValueColor, m_data->value(i));
     }
 
     position.y += 8;
@@ -1480,10 +1530,10 @@ namespace dxvk::hud {
           HudRenderer&        renderer,
           HudPos              position) {
     for (const auto& line : m_lines) {
-      position.y += 20;
-      renderer.drawText(16, position, 0xff40ffffu, line.label);
-      renderer.drawText(16,
-        { position.x + int32_t(renderer.textWidth(16, line.label)), position.y },
+      position.y += HudSmallFontSize + 4;
+      renderer.drawText(HudSmallFontSize, position, 0xff40ffffu, line.label);
+      renderer.drawText(HudSmallFontSize,
+        { position.x + int32_t(renderer.textWidth(HudSmallFontSize, line.label)), position.y },
         0xffffffffu, line.value);
     }
 
@@ -1498,8 +1548,8 @@ namespace dxvk::hud {
     const HudOptions&         options,
           HudRenderer&        renderer,
           HudPos              position) {
-    position.y += 16;
-    renderer.drawText(16, position, 0xffffffffu, "DXVK " DXVK_VERSION);
+    position.y += HudSmallFontSize;
+    renderer.drawText(HudSmallFontSize, position, 0xffffffffu, "DXVK " DXVK_VERSION);
 
     position.y += 8;
     return position;
@@ -1525,8 +1575,8 @@ namespace dxvk::hud {
           HudPos              position) {
     std::lock_guard lock(m_mutex);
 
-    position.y += 16;
-    renderer.drawText(16, position, 0xffffffffu, m_api);
+    position.y += HudSmallFontSize;
+    renderer.drawText(HudSmallFontSize, position, 0xffffffffu, m_api);
 
     position.y += 8;
     return position;
@@ -1567,17 +1617,17 @@ namespace dxvk::hud {
     const HudOptions&         options,
           HudRenderer&        renderer,
           HudPos              position) {
-    position.y += 16;
-    renderer.drawText(16, position, 0xffffffffu, m_deviceName);
+    position.y += HudFontSize;
+    renderer.drawText(HudFontSize, position, 0xffffffffu, m_deviceName);
 
     if (!m_driverName.empty()) {
-      position.y += 24;
-      renderer.drawText(16, position, 0xffffffffu, m_driverName);
+      position.y += HudSmallFontSize + 4;
+      renderer.drawText(HudSmallFontSize, position, 0xffffffffu, m_driverName);
     }
 
     if (!m_driverVer.empty()) {
-      position.y += 20;
-      renderer.drawText(16, position, 0xffffffffu, m_driverVer);
+      position.y += HudSmallFontSize + 4;
+      renderer.drawText(HudSmallFontSize, position, 0xffffffffu, m_driverVer);
     }
 
     position.y += 8;
@@ -1610,11 +1660,10 @@ namespace dxvk::hud {
     const HudOptions&         options,
           HudRenderer&        renderer,
           HudPos              position) {
-    position.y += 16;
+    position.y += HudFontSize;
 
-    renderer.drawText(16, position, 0xff2020ffu, "FPS:");
-    renderer.drawText(16, { position.x + 60, position.y },
-      0xffffffffu, m_frameRate);
+    drawLabelValue(renderer, position, options, 0xff2020ffu,
+      "FPS:", m_frameRate, "FPS:");
 
     position.y += 8;
     return position;
@@ -1739,17 +1788,13 @@ namespace dxvk::hud {
     const HudOptions&         options,
           HudRenderer&        renderer,
           HudPos              position) {
-    int32_t valueOffset = int32_t(renderer.textWidth(16, "0.1% low: "));
+    position.y += HudFontSize;
+    drawLabelValue(renderer, position, options, 0xff2020ffu,
+      "1% low:", m_onePercent, "0.1% low:");
 
-    position.y += 16;
-    renderer.drawText(16, position, 0xff2020ffu, "1% low:");
-    renderer.drawText(16, { position.x + valueOffset, position.y },
-      0xffffffffu, m_onePercent);
-
-    position.y += 20;
-    renderer.drawText(16, position, 0xff2020ffu, "0.1% low:");
-    renderer.drawText(16, { position.x + valueOffset, position.y },
-      0xffffffffu, m_pointOnePercent);
+    position.y += HudLineHeight;
+    drawLabelValue(renderer, position, options, 0xff2020ffu,
+      "0.1% low:", m_pointOnePercent, "0.1% low:");
 
     position.y += 8;
     return position;
@@ -1868,9 +1913,9 @@ namespace dxvk::hud {
     ComputePushConstants pushConstants = { };
     pushConstants.msPerTick = m_device->properties().core.properties.limits.timestampPeriod / 1000000.0f;
     pushConstants.dataPoint = dataPoint;
-    pushConstants.textPosMinX = minPos.x + 48;
+    pushConstants.textPosMinX = minPos.x + renderer.textWidth(HudSmallFontSize, "min: ");
     pushConstants.textPosMinY = minPos.y;
-    pushConstants.textPosMaxX = maxPos.x + 48;
+    pushConstants.textPosMaxX = maxPos.x + renderer.textWidth(HudSmallFontSize, "max: ");
     pushConstants.textPosMaxY = maxPos.y;
 
     ctx->cmdBindPipeline(DxvkCmdBuffer::InitBuffer,
@@ -1891,8 +1936,9 @@ namespace dxvk::hud {
     ctx->cmdPipelineBarrier(DxvkCmdBuffer::InitBuffer, &depInfo);
 
     // Display the min/max numbers
-    renderer.drawText(12, minPos, 0xff4040ff, "min:");
-    renderer.drawText(12, maxPos, 0xff4040ff, "max:");
+    static_assert(HudSmallFontSize == 14, "Match hud_frame_time_eval.comp text size");
+    renderer.drawText(HudSmallFontSize, minPos, 0xff4040ff, "min:");
+    renderer.drawText(HudSmallFontSize, maxPos, 0xff4040ff, "max:");
 
     renderer.drawTextIndirect(ctx, key, drawParamBuffer,
       drawInfoBuffer, m_textRdView, 2u);
@@ -2132,7 +2178,7 @@ namespace dxvk::hud {
       uint64_t syncTicks = m_maxSyncTicks / 100;
 
       m_syncString = m_maxSyncCount
-        ? str::format(m_maxSyncCount, " (", (syncTicks / 10), ".", (syncTicks % 10), " ms)")
+        ? str::format(m_maxSyncCount, " (", (syncTicks / 10), ".", (syncTicks % 10), "ms)")
         : str::format(m_maxSyncCount);
 
       m_maxSubmitCount = 0;
@@ -2150,13 +2196,13 @@ namespace dxvk::hud {
     const HudOptions&         options,
           HudRenderer&        renderer,
           HudPos              position) {
-    position.y += 16;
-    renderer.drawText(16, position, 0xff4080ff, "Queue submissions:");
-    renderer.drawText(16, { position.x + 228, position.y }, 0xffffffffu, m_submitString);
+    position.y += HudFontSize;
+    drawLabelValue(renderer, position, options, 0xff4080ff,
+      "Queue submissions:", m_submitString, "Queue submissions:");
 
-    position.y += 20;
-    renderer.drawText(16, position, 0xff4080ff, "Queue syncs:");
-    renderer.drawText(16, { position.x + 228, position.y }, 0xffffffffu, m_syncString);
+    position.y += HudLineHeight;
+    drawLabelValue(renderer, position, options, 0xff4080ff,
+      "Queue syncs:", m_syncString, "Queue submissions:");
 
     position.y += 8;
     return position;
@@ -2204,21 +2250,21 @@ namespace dxvk::hud {
       ? str::format(m_drawCallCount, " (", m_drawCount, ")")
       : str::format(m_drawCallCount);
 
-    position.y += 16;
-    renderer.drawText(16, position, 0xffff8040, "Draw calls:");
-    renderer.drawText(16, { position.x + 192, position.y }, 0xffffffffu, drawCount);
+    position.y += HudFontSize;
+    drawLabelValue(renderer, position, options, 0xffff8040,
+      "Draw calls:", drawCount, "Dispatch calls:");
     
-    position.y += 20;
-    renderer.drawText(16, position, 0xffff8040, "Dispatch calls:");
-    renderer.drawText(16, { position.x + 192, position.y }, 0xffffffffu, str::format(m_dispatchCount));
+    position.y += HudLineHeight;
+    drawLabelValue(renderer, position, options, 0xffff8040,
+      "Dispatch calls:", str::format(m_dispatchCount), "Dispatch calls:");
     
-    position.y += 20;
-    renderer.drawText(16, position, 0xffff8040, "Render passes:");
-    renderer.drawText(16, { position.x + 192, position.y }, 0xffffffffu, str::format(m_renderPassCount));
+    position.y += HudLineHeight;
+    drawLabelValue(renderer, position, options, 0xffff8040,
+      "Render passes:", str::format(m_renderPassCount), "Dispatch calls:");
     
-    position.y += 20;
-    renderer.drawText(16, position, 0xffff8040, "Barriers:");
-    renderer.drawText(16, { position.x + 192, position.y }, 0xffffffffu, str::format(m_barrierCount));
+    position.y += HudLineHeight;
+    drawLabelValue(renderer, position, options, 0xffff8040,
+      "Barriers:", str::format(m_barrierCount), "Dispatch calls:");
     
     position.y += 8;
     return position;
@@ -2251,19 +2297,19 @@ namespace dxvk::hud {
     const HudOptions&         options,
           HudRenderer&        renderer,
           HudPos              position) {
-    position.y += 16;
-    renderer.drawText(16, position, 0xffff40ff, "Graphics pipelines:");
-    renderer.drawText(16, { position.x + 240, position.y }, 0xffffffffu, str::format(m_graphicsPipelines));
+    position.y += HudFontSize;
+    drawLabelValue(renderer, position, options, 0xffff40ff,
+      "Graphics pipelines:", str::format(m_graphicsPipelines), "Graphics pipelines:");
 
     if (m_graphicsLibraries) {
-      position.y += 20;
-      renderer.drawText(16, position, 0xffff40ff, "Graphics shaders:");
-      renderer.drawText(16, { position.x + 240, position.y }, 0xffffffffu, str::format(m_graphicsLibraries));
+      position.y += HudLineHeight;
+      drawLabelValue(renderer, position, options, 0xffff40ff,
+        "Graphics shaders:", str::format(m_graphicsLibraries), "Graphics pipelines:");
     }
 
-    position.y += 20;
-    renderer.drawText(16, position, 0xffff40ff, "Compute shaders:");
-    renderer.drawText(16, { position.x + 240, position.y }, 0xffffffffu, str::format(m_computePipelines));
+    position.y += HudLineHeight;
+    drawLabelValue(renderer, position, options, 0xffff40ff,
+      "Compute shaders:", str::format(m_computePipelines), "Graphics pipelines:");
 
     position.y += 8;
     return position;
@@ -2323,27 +2369,27 @@ namespace dxvk::hud {
           HudRenderer&        renderer,
           HudPos              position) {
     if (m_descriptorPoolCount) {
-      position.y += 16;
-      renderer.drawText(16, position, 0xff8040ff, "Descriptor pools:");
-      renderer.drawText(16, { position.x + 216, position.y }, 0xffffffffu, str::format(m_descriptorPoolCount));
+      position.y += HudFontSize;
+      drawLabelValue(renderer, position, options, 0xff8040ff,
+        "Descriptor pools:", str::format(m_descriptorPoolCount), "Descriptor pools:");
 
-      position.y += 20;
-      renderer.drawText(16, position, 0xff8040ff, "Descriptor sets:");
-      renderer.drawText(16, { position.x + 216, position.y }, 0xffffffffu, str::format(m_descriptorSetCountDisplay));
+      position.y += HudLineHeight;
+      drawLabelValue(renderer, position, options, 0xff8040ff,
+        "Descriptor sets:", str::format(m_descriptorSetCountDisplay), "Descriptor pools:");
     }
 
     if (m_descriptorHeapAlloc) {
-      position.y += 16;
-      renderer.drawText(16, position, 0xff8040ff, "Descriptor heaps:");
-      renderer.drawText(16, { position.x + 216, position.y }, 0xffffffffu, str::format(m_descriptorHeapCount, " (", m_descriptorHeapAlloc >> 20, " MB)"));
+      position.y += HudFontSize;
+      drawLabelValue(renderer, position, options, 0xff8040ff,
+        "Descriptor heaps:", str::format(m_descriptorHeapCount, " (", m_descriptorHeapAlloc >> 20, "MB)"), "Descriptor pools:");
 
-      position.y += 20;
-      renderer.drawText(16, position, 0xff8040ff, "Descriptor usage:");
-      renderer.drawText(16, { position.x + 216, position.y }, 0xffffffffu, str::format(m_descriptorHeapUsed >> 10, " kB"));
+      position.y += HudLineHeight;
+      drawLabelValue(renderer, position, options, 0xff8040ff,
+        "Descriptor usage:", str::format(m_descriptorHeapUsed >> 10, "kB"), "Descriptor pools:");
 
-      position.y += 20;
-      renderer.drawText(16, position, 0xff8040ff, "Copy worker:");
-      renderer.drawText(16, { position.x + 216, position.y }, 0xffffffffu, str::format(m_copyThreadLoad, "%"));
+      position.y += HudLineHeight;
+      drawLabelValue(renderer, position, options, 0xff8040ff,
+        "Copy worker:", str::format(m_copyThreadLoad, "%"), "Descriptor pools:");
     }
 
     position.y += 8;
@@ -2384,12 +2430,14 @@ namespace dxvk::hud {
         : 0u;
 
       std::string label = str::format(isDeviceLocal ? "Vidmem" : "Sysmem", " heap ", i, ": ");
-      std::string text  = str::format(std::setfill(' '), std::setw(5), memAllocatedMib, " MB (", percentage, "%) ",
-        std::setw(5 + (percentage < 10 ? 1 : 0) + (percentage < 100 ? 1 : 0)), memUsedMib, " MB used");
+      std::string text  = str::format(std::setfill(' '), std::setw(5), memAllocatedMib, "MB (", percentage, "%) ",
+        std::setw(5 + (percentage < 10 ? 1 : 0) + (percentage < 100 ? 1 : 0)), memUsedMib, "MB used");
 
-      position.y += 16;
-      renderer.drawText(16, position, 0xff40ffffu, label);
-      renderer.drawText(16, { position.x + 168, position.y }, 0xffffffffu, text);
+      position.y += HudFontSize;
+      renderer.drawText(HudFontSize, position, 0xff40ffffu, label);
+      drawMetricValue(renderer,
+        { position.x + int32_t(renderer.textWidth(HudFontSize, label)), position.y },
+        0xffffffffu, text);
 
       position.y += 4;
     }
@@ -2447,8 +2495,8 @@ namespace dxvk::hud {
       uint32_t hitCount = m_cacheStats.requestCount - m_cacheStats.missCount;
       uint32_t hitRate = (100 * hitCount) / std::max(m_cacheStats.requestCount, 1u);
 
-      std::string cacheStr = str::format("Cache: ", m_cacheStats.size >> 10, " kB (", hitRate, "% hit)");
-      renderer.drawText(14, { x, y }, 0xffffffffu, cacheStr);
+      std::string cacheStr = str::format("Cache: ", m_cacheStats.size >> 10, "kB (", hitRate, "% hit)");
+      renderer.drawText(HudSmallFontSize, { x, y }, 0xffffffffu, cacheStr);
 
       y -= 24;
     }
@@ -2529,11 +2577,11 @@ namespace dxvk::hud {
 
       // Render descriptive text
       std::string headline = str::format("Mem type ", (i - 1), " [", type.properties.heapIndex, "]: ",
-        type.chunkCount, " chunk", type.chunkCount != 1u ? "s" : "", " (", (stats.memoryAllocated >> 20u), " MB, ",
+        type.chunkCount, " chunk", type.chunkCount != 1u ? "s" : "", " (", (stats.memoryAllocated >> 20u), "MB, ",
         ((stats.memoryUsed >= (1u << 20u)) ? stats.memoryUsed >> 20 : stats.memoryUsed >> 10),
-        (stats.memoryUsed >= (1u << 20u) ? " MB" : " kB"), " used)");
+        (stats.memoryUsed >= (1u << 20u) ? "MB" : "kB"), " used)");
 
-      renderer.drawText(14, { x, y }, 0xffffffffu, headline);
+      renderer.drawText(HudSmallFontSize, { x, y }, 0xffffffffu, headline);
 
       y -= 24;
     }
@@ -2762,7 +2810,7 @@ namespace dxvk::hud {
 
       m_csChunkString = str::format(diffCsChunks);
       m_csSyncString = m_maxCsSyncCount
-        ? str::format(m_maxCsSyncCount, " (", (syncTicks / 10), ".", (syncTicks % 10), " ms)")
+        ? str::format(m_maxCsSyncCount, " (", (syncTicks / 10), ".", (syncTicks % 10), "ms)")
         : str::format(m_maxCsSyncCount);
 
       uint64_t currCsIdleTicks = counters.getCtr(DxvkStatCounter::CsIdleTicks);
@@ -2791,17 +2839,17 @@ namespace dxvk::hud {
     const HudOptions&         options,
           HudRenderer&        renderer,
           HudPos              position) {
-    position.y += 16;
-    renderer.drawText(16, position, 0xff40ff40, "CS chunks:");
-    renderer.drawText(16, { position.x + 132, position.y }, 0xffffffffu, m_csChunkString);
+    position.y += HudFontSize;
+    drawLabelValue(renderer, position, options, 0xff40ff40,
+      "CS chunks:", m_csChunkString, "CS chunks:");
 
-    position.y += 20;
-    renderer.drawText(16, position, 0xff40ff40, "CS syncs:");
-    renderer.drawText(16, { position.x + 132, position.y }, 0xffffffffu, m_csSyncString);
+    position.y += HudLineHeight;
+    drawLabelValue(renderer, position, options, 0xff40ff40,
+      "CS syncs:", m_csSyncString, "CS chunks:");
 
-    position.y += 20;
-    renderer.drawText(16, position, 0xff40ff40, "CS load:");
-    renderer.drawText(16, { position.x + 132, position.y }, 0xffffffffu, m_csLoadString);
+    position.y += HudLineHeight;
+    drawLabelValue(renderer, position, options, 0xff40ff40,
+      "CS load:", m_csLoadString, "CS chunks:");
 
     position.y += 8;
     return position;
@@ -2845,9 +2893,9 @@ namespace dxvk::hud {
     const HudOptions&         options,
           HudRenderer&        renderer,
           HudPos              position) {
-    position.y += 16;
-    renderer.drawText(16, position, 0xff408040u, "GPU:");
-    renderer.drawText(16, { position.x + 60, position.y }, 0xffffffffu, m_gpuLoadString);
+    position.y += HudFontSize;
+    drawLabelValue(renderer, position, options, 0xff408040u,
+      "GPU:", m_gpuLoadString, "GPU:");
 
     position.y += 8;
     return position;
@@ -2914,7 +2962,7 @@ namespace dxvk::hud {
       if (m_showPercentage)
         string = str::format(string, " (", computePercentage(), "%)");
 
-      renderer.drawText(16, { position.x, -20 }, 0xffffffffu, string);
+      renderer.drawText(HudSmallFontSize, { position.x, -20 }, 0xffffffffu, string);
     }
 
     return position;
@@ -2966,8 +3014,8 @@ namespace dxvk::hud {
         uint32_t latency = (m_accumStats.frameLatency / m_accumFrames).count() / 100u;
         uint32_t sleep = (m_accumStats.sleepDuration / m_accumFrames).count() / 100u;
 
-        m_latencyString = str::format(latency / 10, ".", latency % 10, " ms");
-        m_sleepString = str::format(sleep / 10, ".", sleep % 10, " ms");
+        m_latencyString = str::format(latency / 10, ".", latency % 10, "ms");
+        m_sleepString = str::format(sleep / 10, ".", sleep % 10, "ms");
 
         m_accumStats = { };
         m_accumFrames = 0u;
@@ -2995,15 +3043,15 @@ namespace dxvk::hud {
     if (m_invalidUpdates >= MaxInvalidUpdates)
       return position;
 
-    position.y += 16;
+    position.y += HudFontSize;
 
-    renderer.drawText(16, position, 0xffff60a0u, "Latency: ");
-    renderer.drawText(16, { position.x + 108, position.y }, 0xffffffffu, m_latencyString);
+    drawLabelValue(renderer, position, options, 0xffff60a0u,
+      "Latency:", m_latencyString, "Latency:");
 
-    position.y += 20;
+    position.y += HudLineHeight;
 
-    renderer.drawText(16, position, 0xffff60a0u, "Sleep: ");
-    renderer.drawText(16, { position.x + 108, position.y }, 0xffffffffu, m_sleepString);
+    drawLabelValue(renderer, position, options, 0xffff60a0u,
+      "Sleep:", m_sleepString, "Latency:");
 
     position.y += 8;
     return position;

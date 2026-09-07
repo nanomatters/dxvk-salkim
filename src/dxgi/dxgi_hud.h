@@ -51,7 +51,7 @@ namespace dxvk {
             uint32_t                size,
             hud::HudPos             position,
             uint32_t                color,
-      const std::string&            text) override;
+            std::string_view        text) override;
 
   };
 
