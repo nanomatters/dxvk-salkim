@@ -83,13 +83,16 @@ int main(int argc, char** argv) try {
     x += glyph.w;
     rowHeight = std::max(rowHeight, glyph.h);
   }
-  const int height = y + rowHeight;
+  // Reserve a 4x4 white patch below the glyphs for solid HUD geometry.
+  const int height = y + rowHeight + 4;
   std::vector<unsigned char> atlas(width * height);
   for (const auto& glyph : glyphs) {
     for (int row = 0; row < glyph.h; row++)
       std::copy_n(glyph.pixels.data() + row * glyph.w, glyph.w,
         atlas.data() + (glyph.y + row) * width + glyph.x);
   }
+  for (int row = height - 4; row < height; row++)
+    std::fill_n(atlas.data() + row * width + width - 4, 4, 255);
 
   std::printf("#include \"dxvk_hud_font.h\"\n\n"
     "namespace dxvk::hud {\n\n"
