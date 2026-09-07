@@ -108,6 +108,9 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `swvp`: Shows the vertex processing mode and the current number of software vertex processing shaders *[D3D9 Only]*
 - `scale=x`: Scales the HUD by a factor of `x` (e.g. `1.5`)
 - `opacity=y`: Adjusts the HUD opacity by a factor of `y` (e.g. `0.5`, `1.0` being fully opaque).
+- `background=z`: Adjusts the black text-panel opacity (default `0.45`, `0` disables it).
+  Each top/bottom text block gets one padded rectangle covering all its lines.
+  Panel opacity is also multiplied by `opacity`.
 - `horizontal`: Places text-based HUD items in one horizontal row.
 - `newline`: Starts a new row at this point in a horizontal layout.
 - `center`: Centers text-based HUD items horizontally.
