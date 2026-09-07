@@ -133,7 +133,7 @@ namespace dxvk {
           uint32_t                size,
           hud::HudPos             position,
           uint32_t                color,
-    const std::string&            text) {
+          std::string_view        text) {
     if (text.empty() || m_vertices.size() >= MaxVertices)
       return;
 
