@@ -164,7 +164,7 @@ void main() {
 
     // Emit draw infos for the text
     draw_infos[tid].text_offset = MAX_TEXT_LENGTH * tid;
-    draw_infos[tid].text_length_and_size = len | (12u << 16u);
+    draw_infos[tid].text_length_and_size = len | (14u << 16u);
     draw_infos[tid].packed_xy = tid == 0u
       ? packed_xy_for_min : packed_xy_for_max;
     draw_infos[tid].color = 0xffffffffu;
