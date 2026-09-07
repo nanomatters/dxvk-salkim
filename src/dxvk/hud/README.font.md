@@ -15,6 +15,11 @@ Main labels and values use size 20; units and secondary information use size
 14. Both are multiplied by the HUD's existing `scale` setting. Mixed-size
 values share a baseline, with 24-pixel spacing between main text rows.
 
+The bottom-right 4x4 texels are solid white, reserved below the glyphs for
+background rectangles. Both renderers sample between their texel centers;
+varying UVs keep the SDF shader's derivatives nonzero. This lets the D3D12
+path draw panels with its existing textured-vertex interface, unchanged.
+
 ## Regeneration
 
 Run these commands from this directory with a C++17 compiler and the system
