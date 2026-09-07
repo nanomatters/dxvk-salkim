@@ -11,6 +11,10 @@ falloff with the outline at 0.5. Glyph rectangles include a zero border for
 bilinear filtering. Both HUD rendering paths consume the same data, including
 when drawing smaller text. No font loader or rasterizer is needed at runtime.
 
+Main labels and values use size 20; units and secondary information use size
+14. Both are multiplied by the HUD's existing `scale` setting. Mixed-size
+values share a baseline, with 24-pixel spacing between main text rows.
+
 ## Regeneration
 
 Run these commands from this directory with a C++17 compiler and the system

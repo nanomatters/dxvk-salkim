@@ -33,7 +33,7 @@ namespace dxvk::hud {
 
   uint32_t HudRenderer::textWidth(
           uint32_t            size,
-    const std::string&        text) const {
+          std::string_view    text) const {
     return uint32_t((uint64_t(size) * g_hudFont.advance * text.size()
       + g_hudFont.size - 1u) / g_hudFont.size);
   }
@@ -104,7 +104,7 @@ namespace dxvk::hud {
           uint32_t            size,
           HudPos              pos,
           uint32_t            color,
-    const std::string&        text) {
+          std::string_view    text) {
     if (text.empty())
       return;
 
