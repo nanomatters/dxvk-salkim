@@ -255,11 +255,10 @@ namespace dxvk {
 
     const auto& procs = getWinePresentationSourceProcs();
 
-    if (procs && !(m_id = procs.registerSource(window))) {
-      if (exclusive)
-        presentationSources.erase(window);
-      return WinePresentationSourceStatus::Conflict;
-    }
+    // Wine only tracks windows owned by this process. Registration is
+    // optional; a foreign window or allocation failure is not a conflict.
+    if (procs)
+      m_id = procs.registerSource(window);
 
     m_window = window;
     m_registered = true;
