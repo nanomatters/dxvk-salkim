@@ -1211,18 +1211,20 @@ namespace dxvk {
   void D3D9SwapChainEx::UpdateTargetFrameRate(uint32_t SyncInterval) {
     double frameRate = double(m_parent->GetOptions()->maxFrameRate);
 
-    if (frameRate != -1.0) {
-      if (frameRate == 0.0 && SyncInterval) {
-        bool engageLimiter = SyncInterval > 1u || m_monitor ||
-          m_device->config().latencySleep == Tristate::True;
+    // Clear any pacing installed by suppressed presents when disabling
+    // the limiter, rather than leaving its previous configuration intact.
+    if (frameRate == -1.0) {
+      frameRate = 0.0;
+    } else if (frameRate == 0.0 && SyncInterval) {
+      bool engageLimiter = SyncInterval > 1u || m_monitor ||
+        m_device->config().latencySleep == Tristate::True;
 
-        if (engageLimiter)
-          frameRate = -m_displayRefreshRate / double(SyncInterval);
-      }
-
-      m_wctx->presenter->setFrameRateLimit(frameRate, GetActualFrameLatency());
-      m_targetFrameRate = frameRate;
+      if (engageLimiter)
+        frameRate = -m_displayRefreshRate / double(SyncInterval);
     }
+
+    m_wctx->presenter->setFrameRateLimit(frameRate, GetActualFrameLatency());
+    m_targetFrameRate = frameRate;
   }
 
 
