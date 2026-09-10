@@ -299,9 +299,6 @@ namespace dxvk {
         presentId.pNext = const_cast<void*>(std::exchange(info.pNext, &presentId));
     }
 
-    if (collectPresentTelemetry)
-      presentTimings.pNext = const_cast<void*>(std::exchange(info.pNext, &presentTimings));
-
     if (m_hasSwapchainMaintenance1) {
       modeInfo.pNext = const_cast<void*>(std::exchange(info.pNext, &modeInfo));
       fenceInfo.pNext = const_cast<void*>(std::exchange(info.pNext, &fenceInfo));
@@ -312,18 +309,25 @@ namespace dxvk {
 
     PresentQueueTime* queueTime = nullptr;
 
-    if (collectPresentTelemetry) {
-      queueTime = &m_presentQueueTimes[frameId % m_presentQueueTimes.size()];
-
+    if (collectPresentTelemetry && m_presentTelemetrySupported) {
       std::lock_guard telemetryLock(m_presentTelemetryMutex);
 
       if (m_presentTelemetryEnabled.load(std::memory_order_relaxed)) {
-        queueTime->presentId = frameId;
-        queueTime->timeNs = presentTelemetryNowNs();
-      } else {
-        queueTime = nullptr;
+        // Each outstanding query occupies one driver timing slot. If all
+        // slots are busy, present without telemetry until polling frees one.
+        auto entry = std::find_if(m_presentQueueTimes.begin(), m_presentQueueTimes.end(),
+          [] (const PresentQueueTime& time) { return !time.presentId; });
+
+        if (entry != m_presentQueueTimes.end()) {
+          queueTime = &*entry;
+          queueTime->presentId = frameId;
+          queueTime->timeNs = presentTelemetryNowNs();
+        }
       }
     }
+
+    if (queueTime)
+      presentTimings.pNext = const_cast<void*>(std::exchange(info.pNext, &presentTimings));
 
     VkResult status = m_vkd->vkQueuePresentKHR(
       m_device->queues().graphics.queueHandle, &info);
@@ -622,7 +626,8 @@ namespace dxvk {
 
     {
       std::lock_guard telemetryLock(m_presentTelemetryMutex);
-      m_presentQueueTimes = { };
+      // Pending queries belong to the swapchain, not the HUD enabled state.
+      // Keep their slots occupied until completion or swapchain destruction.
       m_previousPresentCompleteId = 0u;
       m_previousPresentCompleteNs = 0u;
       m_presentTelemetry = { };
@@ -1569,6 +1574,20 @@ namespace dxvk {
       if (!timings[i].reportComplete || !timings[i].presentId)
         continue;
 
+      PresentQueueTime present;
+      {
+        std::lock_guard telemetryLock(m_presentTelemetryMutex);
+        auto entry = std::find_if(m_presentQueueTimes.begin(), m_presentQueueTimes.end(),
+          [&] (const PresentQueueTime& time) { return time.presentId == timings[i].presentId; });
+
+        if (entry == m_presentQueueTimes.end())
+          continue;
+
+        // A complete report releases its driver slot even if its timestamps
+        // are missing or cannot be calibrated into useful HUD measurements.
+        present = std::exchange(*entry, PresentQueueTime());
+      }
+
       uint64_t queueTime = 0u;
       uint64_t completeTime = 0u;
 
@@ -1597,21 +1616,16 @@ namespace dxvk {
       std::lock_guard telemetryLock(m_presentTelemetryMutex);
 
       if (!m_presentTelemetryEnabled.load(std::memory_order_relaxed))
-        return;
+        continue;
 
-      const PresentQueueTime& present =
-        m_presentQueueTimes[timings[i].presentId % m_presentQueueTimes.size()];
+      if (queueTimeNs >= present.timeNs) {
+        telemetry.validFields |= PresenterTelemetryQueue;
+        telemetry.queueDurationNs = queueTimeNs - present.timeNs;
+      }
 
-      if (present.presentId == timings[i].presentId) {
-        if (queueTimeNs >= present.timeNs) {
-          telemetry.validFields |= PresenterTelemetryQueue;
-          telemetry.queueDurationNs = queueTimeNs - present.timeNs;
-        }
-
-        if (completeTimeNs >= present.timeNs) {
-          telemetry.validFields |= PresenterTelemetryPresent;
-          telemetry.presentDurationNs = completeTimeNs - present.timeNs;
-        }
+      if (completeTimeNs >= present.timeNs) {
+        telemetry.validFields |= PresenterTelemetryPresent;
+        telemetry.presentDurationNs = completeTimeNs - present.timeNs;
       }
 
       if (completeTimeNs >= queueTimeNs && queueTimeNs) {
@@ -1622,7 +1636,8 @@ namespace dxvk {
       // This measured visible-to-visible interval naturally reflects VRR cadence.
       if (m_presentTelemetryStage == VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT &&
           completeTimeNs && timings[i].presentId > m_previousPresentCompleteId) {
-        if (m_previousPresentCompleteNs && completeTimeNs > m_previousPresentCompleteNs) {
+        if (timings[i].presentId == m_previousPresentCompleteId + 1u &&
+            m_previousPresentCompleteNs && completeTimeNs > m_previousPresentCompleteNs) {
           telemetry.validFields |= PresenterTelemetryInterval;
           telemetry.displayIntervalNs = completeTimeNs - m_previousPresentCompleteNs;
         }
