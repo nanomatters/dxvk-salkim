@@ -244,6 +244,7 @@ namespace dxvk {
 #define D3DKMT_WINE_GPU_TELEMETRY_MEMORY_CLOCK 0x00000040
 #define D3DKMT_WINE_GPU_TELEMETRY_VRAM        0x00000080
 #define D3DKMT_WINE_GPU_TELEMETRY_PCIE        0x00000100
+#define D3DKMT_WINE_GPU_TELEMETRY_JUNCTION_TEMPERATURE 0x00000200
 #define D3DKMT_WINE_GPU_TELEMETRY_V1_SIZE      80
 
   typedef struct _D3DKMT_WINE_GPU_TELEMETRY
@@ -251,7 +252,7 @@ namespace dxvk {
       UINT32 PhysicalAdapterIndex;
       UINT32 Requested;
       UINT32 Valid;
-      UINT32 Reserved;
+      UINT32 JunctionTemperatureDeciCelsius; /* Formerly reserved; check Valid. */
       ULONGLONG PowerMicrowatts;
       ULONG TemperatureDeciCelsius;
       ULONG PowerLimitMilliwatts;
