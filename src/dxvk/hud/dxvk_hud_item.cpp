@@ -67,6 +67,7 @@ namespace dxvk::hud {
       { "gpu.driver",   "GPU driver:", false, HudSmallFontSize },
       { "gpu.power",    "GPU power:"    },
       { "gpu.temp",     "GPU temp:"     },
+      { "gpu.jtemp",    "GPU jtemp:"    },
       { "gpu.load",     "GPU load:"     },
       { "gpu.clock",    "GPU clock:"    },
       { "gpu.memclock", "Memory clock:" },
@@ -613,6 +614,8 @@ namespace dxvk::hud {
                 |  D3DKMT_WINE_GPU_TELEMETRY_POWER_LIMIT;
     if (hasMetric(metricMask, HudGpuTelemetryMetric::Temperature))
       requested |= D3DKMT_WINE_GPU_TELEMETRY_TEMPERATURE;
+    if (hasMetric(metricMask, HudGpuTelemetryMetric::JunctionTemperature))
+      requested |= D3DKMT_WINE_GPU_TELEMETRY_JUNCTION_TEMPERATURE;
     if (hasMetric(metricMask, HudGpuTelemetryMetric::Utilization))
       requested |= D3DKMT_WINE_GPU_TELEMETRY_UTILIZATION;
     if (hasMetric(metricMask, HudGpuTelemetryMetric::GraphicsClock))
@@ -1235,6 +1238,7 @@ namespace dxvk::hud {
     std::string driverVersion = info.driverInfo;
 
     m_values.fill("--");
+    m_values[size_t(HudGpuTelemetryMetric::JunctionTemperature)].clear();
     m_values[size_t(HudGpuTelemetryMetric::Name)] = info.deviceName;
 
     if (driverVersion.empty())
@@ -1271,6 +1275,7 @@ namespace dxvk::hud {
 
     for (size_t i = size_t(HudGpuTelemetryMetric::Power); i < m_values.size(); i++)
       m_values[i] = "--";
+    m_values[size_t(HudGpuTelemetryMetric::JunctionTemperature)].clear();
 
     data.Requested = m_requested;
     query.hAdapter = m_adapter ? m_adapter->kmtLocal() : 0;
@@ -1304,6 +1309,12 @@ namespace dxvk::hud {
         m_values[size_t(HudGpuTelemetryMetric::Temperature)] =
           str::format(data.TemperatureDeciCelsius / 10, ".",
           data.TemperatureDeciCelsius % 10, "C");
+      }
+
+      if (data.Valid & D3DKMT_WINE_GPU_TELEMETRY_JUNCTION_TEMPERATURE) {
+        m_values[size_t(HudGpuTelemetryMetric::JunctionTemperature)] =
+          str::format(data.JunctionTemperatureDeciCelsius / 10, ".",
+          data.JunctionTemperatureDeciCelsius % 10, "C");
       }
 
       if (data.Valid & D3DKMT_WINE_GPU_TELEMETRY_UTILIZATION)
@@ -1483,10 +1494,11 @@ namespace dxvk::hud {
       ? m_metricCount
       : first + 1;
     uint32_t valueOffset = 0;
+    bool rendered = false;
 
     if (!options.horizontal) {
       for (size_t i = first; i < end; i++) {
-        if (m_metricMask & (uint64_t(1) << i))
+        if ((m_metricMask & (uint64_t(1) << i)) && !m_data->value(i).empty())
           valueOffset = std::max(valueOffset,
             renderer.textWidth(m_metrics[i].fontSize, m_metrics[i].label)
             + renderer.textWidth(m_metrics[i].fontSize, " "));
@@ -1494,7 +1506,7 @@ namespace dxvk::hud {
     }
 
     for (size_t i = first; i < end; i++) {
-      if (!(m_metricMask & (uint64_t(1) << i)))
+      if (!(m_metricMask & (uint64_t(1) << i)) || m_data->value(i).empty())
         continue;
 
       uint32_t fontSize = m_metrics[i].fontSize;
@@ -1504,6 +1516,7 @@ namespace dxvk::hud {
         : valueOffset;
 
       position.y += fontSize + 4;
+      rendered = true;
       renderer.drawText(fontSize, position, m_labelColor, m_metrics[i].label);
       HudPos valuePos = { position.x + int32_t(rowValueOffset), position.y };
       if (m_metrics[i].hasUnits)
@@ -1512,7 +1525,7 @@ namespace dxvk::hud {
         renderer.drawText(fontSize, valuePos, HudTelemetryValueColor, m_data->value(i));
     }
 
-    position.y += 8;
+    if (rendered) position.y += 8;
     return position;
   }
 
