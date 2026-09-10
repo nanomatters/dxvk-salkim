@@ -45,6 +45,8 @@ namespace dxvk {
     Rc<hud::HudSystemInfoItem>       m_systemInfo;
     std::vector<DXGI_VK_HUD_VERTEX> m_vertices;
     dxvk::high_resolution_clock::time_point m_nextPresentationUpdate;
+    bool                             m_toggleEnabled;
+    bool                             m_hidden = false;
     bool                             m_failed = false;
 
     void drawText(
