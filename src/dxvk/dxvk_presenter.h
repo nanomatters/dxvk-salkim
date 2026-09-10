@@ -420,7 +420,7 @@ namespace dxvk {
       uint64_t timeNs = 0u;
     };
 
-    std::array<PresentQueueTime, FrameQueueSize> m_presentQueueTimes;
+    std::array<PresentQueueTime, MaxFrameQueueSize> m_presentQueueTimes;
     uint64_t                    m_previousPresentCompleteId = 0u;
     uint64_t                    m_previousPresentCompleteNs = 0u;
 
