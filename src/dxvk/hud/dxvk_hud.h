@@ -51,6 +51,10 @@ namespace dxvk::hud {
       return m_hudItems.empty();
     }
 
+    bool visible() const {
+      return !m_hidden && !empty();
+    }
+
     /**
      * \brief Adds a HUD item if enabled
      *
@@ -85,6 +89,8 @@ namespace dxvk::hud {
     HudItemSet            m_hudItems;
     Rc<HudSystemInfoItem> m_systemInfo;
     dxvk::high_resolution_clock::time_point m_nextPresentationUpdate;
+    bool                  m_toggleEnabled;
+    bool                  m_hidden = false;
     
   };
   
