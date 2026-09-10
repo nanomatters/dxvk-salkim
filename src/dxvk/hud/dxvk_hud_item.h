@@ -425,6 +425,7 @@ namespace dxvk::hud {
     Driver,
     Power,
     Temperature,
+    JunctionTemperature,
     Utilization,
     GraphicsClock,
     MemoryClock,
