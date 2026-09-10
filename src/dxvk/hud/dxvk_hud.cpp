@@ -10,7 +10,8 @@ namespace dxvk::hud {
   : m_device        (device),
     m_hasDxgiColorSpace(presenter != nullptr),
     m_renderer      (device),
-    m_hudItems      (device) {
+    m_hudItems      (device),
+    m_toggleEnabled(isHudToggleEnabled()) {
     addItem<HudVersionItem>("version", -1);
     addItem<HudDeviceInfoItem>("devinfo", -1, m_device);
     m_systemInfo = m_hudItems.addSystemInfoItems();
@@ -42,9 +43,11 @@ namespace dxvk::hud {
   void Hud::update(VkColorSpaceKHR colorSpace) {
     auto now = dxvk::high_resolution_clock::now();
 
-    if (m_systemInfo && now >= m_nextPresentationUpdate) {
-      bool directScanout = queryWineDisplayFeedback()
-        & WineDisplayFeedbackDirectScanout;
+    // Visibility must keep updating when hidden, including without a winsys item.
+    if (!empty() && (m_systemInfo || m_toggleEnabled) && now >= m_nextPresentationUpdate) {
+      uint32_t feedback = queryWineDisplayFeedback();
+      m_hidden = m_toggleEnabled && (feedback & WineDisplayFeedbackHudHidden);
+      bool directScanout = feedback & WineDisplayFeedbackDirectScanout;
 
       HudPresentationColorSpace hudColorSpace = HudPresentationColorSpace::Sdr;
       if (m_hasDxgiColorSpace) {
@@ -54,7 +57,8 @@ namespace dxvk::hud {
           hudColorSpace = HudPresentationColorSpace::ScRgb;
       }
 
-      m_systemInfo->setPresentationStatus(hudColorSpace, directScanout);
+      if (m_systemInfo)
+        m_systemInfo->setPresentationStatus(hudColorSpace, directScanout);
       m_nextPresentationUpdate = now + std::chrono::seconds(1);
     }
 
@@ -65,7 +69,7 @@ namespace dxvk::hud {
   void Hud::render(
     const Rc<DxvkCommandList>&ctx,
     const Rc<DxvkImageView>&  dstView) {
-    if (empty())
+    if (!visible())
       return;
 
     auto key = m_renderer.getPipelineKey(dstView);

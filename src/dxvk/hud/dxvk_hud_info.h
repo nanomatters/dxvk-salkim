@@ -9,8 +9,10 @@ namespace dxvk::hud {
 
   constexpr uint32_t WineDisplayBackendMask = 0x000000ffu;
   constexpr uint32_t WineDisplayFeedbackDirectScanout = 0x00000800u;
+  constexpr uint32_t WineDisplayFeedbackHudHidden = 0x00010000u;
 
   uint32_t queryWineDisplayFeedback();
+  bool isHudToggleEnabled();
 
   struct HudSystemInfo {
     std::string cpuName;

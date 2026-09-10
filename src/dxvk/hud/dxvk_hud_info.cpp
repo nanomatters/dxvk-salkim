@@ -113,6 +113,12 @@ namespace dxvk::hud {
   }
 
 
+  bool isHudToggleEnabled() {
+    const auto config = env::getEnvVar("DXVK_HUD");
+    return !config.empty() && config != "0";
+  }
+
+
   HudSystemInfo::HudSystemInfo()
   : protonBuild(trim(env::getEnvVar("PROTON_BUILD_NAME"))) {
 #ifdef _WIN32

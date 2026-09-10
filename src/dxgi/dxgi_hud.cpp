@@ -57,7 +57,8 @@ namespace dxvk {
           ID3DLowLatencyDevice*   lowLatencyDevice,
           IDXGIVkSwapChain*       presenter,
           int32_t                 fpsLowsWindow)
-  : m_hudItems(std::move(config), fpsLowsWindow) {
+  : m_hudItems(std::move(config), fpsLowsWindow),
+    m_toggleEnabled(hud::isHudToggleEnabled()) {
     m_hudItems.add<hud::HudVersionItem>("version", -1);
     m_hudItems.add<hud::HudDeviceInfoItem>("devinfo", -1,
       std::move(deviceName), std::string(), std::string());
@@ -91,22 +92,26 @@ namespace dxvk {
 
     auto now = dxvk::high_resolution_clock::now();
 
-    if (m_systemInfo && now >= m_nextPresentationUpdate) {
+    if ((m_systemInfo || m_toggleEnabled) && now >= m_nextPresentationUpdate) {
+      uint32_t feedback = hud::queryWineDisplayFeedback();
+      m_hidden = m_toggleEnabled && (feedback & hud::WineDisplayFeedbackHudHidden);
       hud::HudPresentationColorSpace hudColorSpace = hud::HudPresentationColorSpace::Sdr;
       if (colorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
         hudColorSpace = hud::HudPresentationColorSpace::Hdr10;
       else if (colorSpace == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)
         hudColorSpace = hud::HudPresentationColorSpace::ScRgb;
 
-      bool directScanout = hud::queryWineDisplayFeedback()
-        & hud::WineDisplayFeedbackDirectScanout;
-      m_systemInfo->setPresentationStatus(hudColorSpace, directScanout);
+      bool directScanout = feedback & hud::WineDisplayFeedbackDirectScanout;
+      if (m_systemInfo)
+        m_systemInfo->setPresentationStatus(hudColorSpace, directScanout);
       m_nextPresentationUpdate = now + std::chrono::seconds(1);
     }
 
     m_hudItems.update();
     m_vertices.clear();
-    m_hudItems.render(*this, surfaceWidth, surfaceHeight);
+    // Submit an empty vertex list while hidden so VKD3D drops the previous HUD.
+    if (!m_hidden)
+      m_hudItems.render(*this, surfaceWidth, surfaceHeight);
 
     const auto& font = hud::g_hudFont;
     DXGI_VK_HUD_DATA data = { };
