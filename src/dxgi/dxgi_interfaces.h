@@ -59,6 +59,7 @@ struct DXGI_VK_FRAME_STATISTICS {
  * \brief HUD vertex
  */
 struct DXGI_VK_HUD_VERTEX {
+  // Unscaled pixels in the current DXGI backbuffer coordinate space.
   FLOAT Position[2];
   FLOAT Texcoord[2];
   UINT  Color;
