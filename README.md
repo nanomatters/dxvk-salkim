@@ -54,6 +54,7 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `gpu.driver`: Displays the Vulkan driver name and version.
 - `gpu.power`: Displays GPU power draw and the current power limit in watts.
 - `gpu.temp`: Displays GPU temperature.
+- `gpu.jtemp`: Displays GPU junction (hotspot) temperature as `GPU jtemp`.
 - `gpu.load`: Displays device-reported GPU utilization.
 - `gpu.clock`: Displays the current graphics clock.
 - `gpu.memclock`: Displays the current memory clock.
@@ -125,6 +126,10 @@ HUD elements are displayed in the order in which they are listed.
 Prefix an item with `-` to exclude it from a group or from `full`. Exclusions
 take precedence regardless of token order. For example,
 `DXVK_HUD=gpu,-gpu.name` displays all GPU telemetry except the device name.
+Junction temperature uses a GPU hwmon sensor labelled `junction`, such as
+AMD's hotspot sensor. The row is hidden when no valid reading is available;
+the ordinary GPU temperature is not substituted. Like other GPU telemetry,
+it updates once per second, including while the HUD or row is hidden.
 Reflex marker timestamps are displayed relative to the simulation start marker.
 Presentation pipeline timings require `VK_EXT_present_timing`. PresentComplete
 uses first pixel visible when available, then first pixel out or request dequeued.
