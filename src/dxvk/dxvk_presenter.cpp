@@ -259,6 +259,24 @@ namespace dxvk {
       && m_presentTelemetryEnabled.load(std::memory_order_relaxed)
       && m_presentTelemetrySupported;
 
+    PresentQueueTime* queueTime = nullptr;
+
+    if (frameId && m_hasPresentId && m_timingMode.presentStage) {
+      std::lock_guard telemetryLock(m_presentTelemetryMutex);
+
+      // Share the driver's bounded queue with upstream presentation timing.
+      // Keep presenting without a timing request when every slot is occupied.
+      auto end = m_presentQueueTimes.end();
+      auto entry = std::find_if(m_presentQueueTimes.begin(), end,
+        [] (const PresentQueueTime& time) { return !time.presentId; });
+
+      if (entry != end) {
+        queueTime = &*entry;
+        queueTime->presentId = frameId;
+        queueTime->timeNs = collectPresentTelemetry ? presentTelemetryNowNs() : 0u;
+      }
+    }
+
     VkPresentIdKHR presentId = { VK_STRUCTURE_TYPE_PRESENT_ID_KHR };
     presentId.swapchainCount = 1;
     presentId.pPresentIds   = &frameId;
@@ -298,11 +316,11 @@ namespace dxvk {
       frameTargetTime = computeFrameTargetTime(frameId);
       frameIntervalTicks = dxvk::high_resolution_clock::get_ticks(std::chrono::nanoseconds(m_timingMode.frameIntervalNs));
 
-      if (collectPresentTelemetry)
+      if (collectPresentTelemetry && queueTime)
         timingInfo.presentStageQueries |= VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT
                                        | m_presentTelemetryStage;
 
-      if (isFifoMode && m_timingMode.presentStage) {
+      if (isFifoMode && queueTime && m_timingMode.presentStage) {
         timingInfo.timeDomainId = m_timingMode.timeDomainId;
         timingInfo.presentStageQueries |= m_timingMode.presentStage;
 
@@ -358,21 +376,6 @@ namespace dxvk {
 
     if (latencyFrameId)
       setLatencyMarker(latencyFrameId, VK_LATENCY_MARKER_PRESENT_START_NV);
-
-    PresentQueueTime* queueTime = nullptr;
-
-    if (collectPresentTelemetry) {
-      queueTime = &m_presentQueueTimes[frameId % m_presentQueueTimes.size()];
-
-      std::lock_guard telemetryLock(m_presentTelemetryMutex);
-
-      if (m_presentTelemetryEnabled.load(std::memory_order_relaxed)) {
-        queueTime->presentId = frameId;
-        queueTime->timeNs = presentTelemetryNowNs();
-      } else {
-        queueTime = nullptr;
-      }
-    }
 
     VkResult status = m_vkd->vkQueuePresentKHR(
       m_device->queues().graphics.queueHandle, &info);
@@ -670,7 +673,8 @@ namespace dxvk {
 
     {
       std::lock_guard telemetryLock(m_presentTelemetryMutex);
-      m_presentQueueTimes = { };
+      // Pending queries belong to the swapchain, not the HUD enabled state.
+      // Keep their slots occupied until completion or swapchain destruction.
       m_previousPresentCompleteId = 0u;
       m_previousPresentCompleteNs = 0u;
       m_presentTelemetry = { };
@@ -1194,7 +1198,12 @@ namespace dxvk {
 
     // Set up initial present timing state
     if (m_timingMode.presentStage) {
-      m_vkd->vkSetSwapchainPresentTimingQueueSizeEXT(m_vkd->device(), m_swapchain, FrameQueueSize);
+      if (m_vkd->vkSetSwapchainPresentTimingQueueSizeEXT(
+          m_vkd->device(), m_swapchain, FrameQueueSize) != VK_SUCCESS) {
+        m_timingMode = PresenterTimingInfo();
+        m_presentTelemetrySupported = false;
+        return VK_SUCCESS;
+      }
 
       updateDisplayTiming();
 
@@ -1810,8 +1819,28 @@ namespace dxvk {
       updateMode = true;
       updateTimingDomains();
 
-      if (!recalibrateTimeDomains())
+      if (!recalibrateTimeDomains()) {
+        updateTimingMode();
+
+        // The driver has already consumed these reports. Retire completed
+        // query slots even when their timestamps cannot be calibrated.
+        std::lock_guard telemetryLock(m_presentTelemetryMutex);
+
+        for (size_t i = 0u; i < timingProperties.presentationTimingCount; i++) {
+          const auto& report = reports[i];
+
+          if (!report.reportComplete || !report.presentId)
+            continue;
+
+          auto entry = std::find_if(m_presentQueueTimes.begin(), m_presentQueueTimes.end(),
+            [&] (const PresentQueueTime& time) { return time.presentId == report.presentId; });
+
+          if (entry != m_presentQueueTimes.end())
+            *entry = PresentQueueTime();
+        }
+
         return commitTimingFeedback(feedback, true);
+      }
     }
 
     if (updateMode)
@@ -2265,6 +2294,22 @@ namespace dxvk {
     if (!timing.reportComplete || !timing.presentId)
       return;
 
+    PresentQueueTime present;
+    {
+      std::lock_guard telemetryLock(m_presentTelemetryMutex);
+      auto entry = std::find_if(m_presentQueueTimes.begin(), m_presentQueueTimes.end(),
+        [&] (const PresentQueueTime& time) { return time.presentId == timing.presentId; });
+
+      if (entry == m_presentQueueTimes.end())
+        return;
+
+      // Complete reports release their slots even without useful timestamps.
+      present = std::exchange(*entry, PresentQueueTime());
+    }
+
+    if (!present.timeNs || !m_presentTelemetryEnabled.load(std::memory_order_relaxed))
+      return;
+
     uint64_t queueTime = 0u;
     uint64_t completeTime = 0u;
 
@@ -2295,19 +2340,14 @@ namespace dxvk {
     if (!m_presentTelemetryEnabled.load(std::memory_order_relaxed))
       return;
 
-    const PresentQueueTime& present =
-      m_presentQueueTimes[timing.presentId % m_presentQueueTimes.size()];
+    if (queueTimeNs >= present.timeNs) {
+      telemetry.validFields |= PresenterTelemetryQueue;
+      telemetry.queueDurationNs = queueTimeNs - present.timeNs;
+    }
 
-    if (present.presentId == timing.presentId) {
-      if (queueTimeNs >= present.timeNs) {
-        telemetry.validFields |= PresenterTelemetryQueue;
-        telemetry.queueDurationNs = queueTimeNs - present.timeNs;
-      }
-
-      if (completeTimeNs >= present.timeNs) {
-        telemetry.validFields |= PresenterTelemetryPresent;
-        telemetry.presentDurationNs = completeTimeNs - present.timeNs;
-      }
+    if (completeTimeNs >= present.timeNs) {
+      telemetry.validFields |= PresenterTelemetryPresent;
+      telemetry.presentDurationNs = completeTimeNs - present.timeNs;
     }
 
     if (completeTimeNs >= queueTimeNs && queueTimeNs) {
@@ -2318,7 +2358,8 @@ namespace dxvk {
     // This measured visible-to-visible interval naturally reflects VRR cadence.
     if (m_presentTelemetryStage == VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT &&
         completeTimeNs && timing.presentId > m_previousPresentCompleteId) {
-      if (m_previousPresentCompleteNs && completeTimeNs > m_previousPresentCompleteNs) {
+      if (timing.presentId == m_previousPresentCompleteId + 1u &&
+          m_previousPresentCompleteNs && completeTimeNs > m_previousPresentCompleteNs) {
         telemetry.validFields |= PresenterTelemetryInterval;
         telemetry.displayIntervalNs = completeTimeNs - m_previousPresentCompleteNs;
       }
