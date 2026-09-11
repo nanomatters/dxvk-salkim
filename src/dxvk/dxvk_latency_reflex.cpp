@@ -1,3 +1,5 @@
+#include <limits>
+
 #include "dxvk_latency_reflex.h"
 
 namespace dxvk {
@@ -516,11 +518,19 @@ namespace dxvk {
     const DxvkReflexLatencyFrameData&     frame,
     const VkLatencyTimingsFrameReportNV&  report,
           time_point                      timestamp) {
-    if (frame.cpuSimBegin == time_point() || !report.simStartTimeUs)
+    if (timestamp == time_point() || frame.cpuSimBegin == time_point() || !report.simStartTimeUs)
       return 0u;
 
     int64_t diffUs = std::chrono::duration_cast<std::chrono::microseconds>(timestamp - frame.cpuSimBegin).count();
-    return report.simStartTimeUs + diffUs;
+
+    if (diffUs < 0) {
+      uint64_t offset = uint64_t(0) - uint64_t(diffUs);
+      return offset <= report.simStartTimeUs ? report.simStartTimeUs - offset : 0u;
+    }
+
+    uint64_t offset = uint64_t(diffUs);
+    return offset <= std::numeric_limits<uint64_t>::max() - report.simStartTimeUs
+      ? report.simStartTimeUs + offset : 0u;
   }
 
 }
