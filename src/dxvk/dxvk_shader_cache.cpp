@@ -677,13 +677,12 @@ namespace dxvk {
   }
 
 
-  void DxvkShaderCache::freeInstance() {
+  void DxvkShaderCache::decRef() {
     std::lock_guard lock(s_instance.mutex);
 
-    // The ref count can only be incremented from 0 to 1 inside a locked
-    // context, so this check is safe. Don't destroy the object if another
-    // thread has essentially revived it.
-    if (m_useCount.load() || s_instance.instance != this) {
+    // Serialize the final release with getInstance so that a getter cannot
+    // revive a zero-reference cache while its deletion is pending.
+    if (m_useCount.fetch_sub(1u) == 1u) {
       if (s_instance.instance == this)
         s_instance.instance = nullptr;
 
