@@ -207,6 +207,8 @@ namespace dxvk {
     void submitCmdLists();
 
     void finishCmdLists();
+
+    void waitForGpuIdle();
     
   };
   
