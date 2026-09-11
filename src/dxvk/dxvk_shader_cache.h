@@ -41,10 +41,7 @@ namespace dxvk {
       m_useCount.fetch_add(1u);
     }
 
-    void decRef() {
-      if (m_useCount.fetch_sub(1u) == 1u)
-        freeInstance();
-    }
+    void decRef();
 
     /**
      * \brief Looks up shader with matching name and options
@@ -156,8 +153,6 @@ namespace dxvk {
     bool readShaderLutEntry(LutKey& key, LutEntry& entry, size_t& offset);
 
     void runWriter();
-
-    void freeInstance();
 
     static bool writeShaderXfbInfo(util::File& stream, const dxbc_spv::ir::IoXfbInfo& xfb);
 
