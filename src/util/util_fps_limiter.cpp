@@ -29,7 +29,7 @@ namespace dxvk {
       ? TimerDuration(int64_t(double(TimerDuration::period::den) / frameRate))
       : TimerDuration::zero();
 
-    if (m_targetInterval != interval) {
+    if (m_targetInterval != interval || m_maxLatency != maxLatency) {
       m_targetInterval = interval;
 
       m_heuristicFrameTime = TimePoint();
