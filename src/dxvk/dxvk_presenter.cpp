@@ -624,9 +624,15 @@ namespace dxvk {
 
     VkLatencySleepInfoNV info = { VK_STRUCTURE_TYPE_LATENCY_SLEEP_INFO_NV };
     info.signalSemaphore = m_latencySemaphore;
-    info.value = m_latencySleepCounter + 1u;
+    info.value = ++m_latencySleepValue;
 
-    m_vkd->vkLatencySleepNV(m_vkd->device(), m_swapchain, &info);
+    VkResult vr = m_vkd->vkLatencySleepNV(m_vkd->device(), m_swapchain, &info);
+
+    // A failed sleep request may not signal the semaphore.
+    if (vr != VK_SUCCESS) {
+      Logger::err(str::format("Presenter: Latency sleep failed: ", vr));
+      return;
+    }
 
     lock.unlock();
 
@@ -636,7 +642,13 @@ namespace dxvk {
     waitInfo.pValues = &info.value;
 
     auto t0 = dxvk::high_resolution_clock::now();
-    m_vkd->vkWaitSemaphores(m_vkd->device(), &waitInfo, ~0ull);
+    vr = m_vkd->vkWaitSemaphores(m_vkd->device(), &waitInfo, ~0ull);
+
+    if (vr != VK_SUCCESS) {
+      Logger::err(str::format("Presenter: Latency sleep wait failed: ", vr));
+      return;
+    }
+
     auto t1 = dxvk::high_resolution_clock::now();
 
     lock.lock();

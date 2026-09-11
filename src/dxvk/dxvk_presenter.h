@@ -451,6 +451,7 @@ namespace dxvk {
 
     std::optional<VkLatencySleepModeInfoNV> m_latencySleepMode;
     VkSemaphore                 m_latencySemaphore = VK_NULL_HANDLE;
+    uint64_t                    m_latencySleepValue = 0u;
     uint64_t                    m_latencySleepCounter = 0u;
     uint64_t                    m_latencySleepDurationUs = 0u;
 
