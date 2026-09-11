@@ -36,18 +36,17 @@ namespace dxvk {
         Logger::warn(str::format("Reflex: Expected internal frame ID ",
           expectedFrameId, " for ", m_lastPresentAppFrameId, ", got ", frameId));
 
-        uint64_t nextAppFrameId = m_lastPresentAppFrameId;
         uint64_t nextDxvkFrameId = frameId;
 
-        auto entry = m_appToDxvkFrameIds.find(nextAppFrameId);
+        auto first = m_appToDxvkFrameIds.find(m_lastPresentAppFrameId);
 
-        while (entry != m_appToDxvkFrameIds.end()) {
-          nextAppFrameId = entry->first;
+        // Update all mappings before recycling slots so that an old slot
+        // cannot erase a pending frame's mapping during the remap.
+        for (auto entry = first; entry != m_appToDxvkFrameIds.end(); entry++)
+          entry->second = nextDxvkFrameId++;
 
-          mapFrameId(nextAppFrameId, nextDxvkFrameId++);
-
-          entry = m_appToDxvkFrameIds.upper_bound(nextAppFrameId);
-        }
+        for (auto entry = first; entry != m_appToDxvkFrameIds.end(); entry++)
+          getFrameData(entry->second).appFrameId = entry->first;
 
         m_nextAllocFrameId = nextDxvkFrameId;
         m_nextValidFrameId = nextDxvkFrameId + 1u;
@@ -448,7 +447,10 @@ namespace dxvk {
     auto& frameData = m_frames[dxvkFrameId % FrameCount];
 
     if (frameData.frameId != dxvkFrameId) {
-      m_appToDxvkFrameIds.erase(frameData.appFrameId);
+      // A remapped application frame may still be referenced by an old slot.
+      auto entry = m_appToDxvkFrameIds.find(frameData.appFrameId);
+      if (entry != m_appToDxvkFrameIds.end() && entry->second == frameData.frameId)
+        m_appToDxvkFrameIds.erase(entry);
 
       frameData = DxvkReflexLatencyFrameData();
       frameData.frameId = dxvkFrameId;
