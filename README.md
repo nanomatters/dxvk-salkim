@@ -116,6 +116,9 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `newline`: Starts a new row at this point in a horizontal layout.
 - `center`: Centers text-based HUD items horizontally.
 - `bottom`: Places text-based HUD items after this token along the bottom edge.
+- `hide`: Starts the configured HUD hidden. On Wineland, press Ctrl+Shift+O
+  to show or hide it; visibility updates once per second, including while hidden.
+  This option selects no HUD elements itself and is not implied by `full`.
 
 For example, `DXVK_HUD=devinfo,fps,newline,fps_lows,horizontal` places
 device information and FPS on the first row and low frame rates on the second.
@@ -126,6 +129,8 @@ HUD elements are displayed in the order in which they are listed.
 Prefix an item with `-` to exclude it from a group or from `full`. Exclusions
 take precedence regardless of token order. For example,
 `DXVK_HUD=gpu,-gpu.name` displays all GPU telemetry except the device name.
+For example, `DXVK_HUD=fps,gpu,hide` starts with FPS and GPU telemetry hidden;
+`-hide` overrides `hide` regardless of token order.
 Junction temperature uses a GPU hwmon sensor labelled `junction`, such as
 AMD's hotspot sensor. The row is hidden when no valid reading is available;
 the ordinary GPU temperature is not substituted. Like other GPU telemetry,

@@ -58,7 +58,8 @@ namespace dxvk {
           IDXGIVkSwapChain*       presenter,
           int32_t                 fpsLowsWindow)
   : m_hudItems(std::move(config), fpsLowsWindow),
-    m_toggleEnabled(hud::isHudToggleEnabled()) {
+    m_toggleEnabled(hud::isHudToggleEnabled()),
+    m_hidden(m_hudItems.isExplicitlyEnabled("hide")) {
     m_hudItems.add<hud::HudVersionItem>("version", -1);
     m_hudItems.add<hud::HudDeviceInfoItem>("devinfo", -1,
       std::move(deviceName), std::string(), std::string());
@@ -94,7 +95,8 @@ namespace dxvk {
 
     if ((m_systemInfo || m_toggleEnabled) && now >= m_nextPresentationUpdate) {
       uint32_t feedback = hud::queryWineDisplayFeedback();
-      m_hidden = m_toggleEnabled && (feedback & hud::WineDisplayFeedbackHudHidden);
+      m_hidden = m_hudItems.isExplicitlyEnabled("hide")
+        != (m_toggleEnabled && (feedback & hud::WineDisplayFeedbackHudVisibility));
       hud::HudPresentationColorSpace hudColorSpace = hud::HudPresentationColorSpace::Sdr;
       if (colorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
         hudColorSpace = hud::HudPresentationColorSpace::Hdr10;
