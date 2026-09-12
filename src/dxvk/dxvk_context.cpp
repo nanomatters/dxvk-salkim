@@ -7367,6 +7367,10 @@ namespace dxvk {
       }
 
       dirtySetMask = layout->getDirtySetMask(pipelineLayoutType, m_descriptorState);
+
+      // Rewrite heap-relative specialization data along with the descriptor sets.
+      updateSpecData = BindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS
+        && m_flags.test(DxvkContextFlag::GpIndependentSets);
     }
 
     std::array<uint32_t, DxvkDescriptorSets::SetCount + 1u> bufferIndices = { };
