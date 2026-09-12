@@ -11,7 +11,8 @@ namespace dxvk::hud {
     m_hasDxgiColorSpace(presenter != nullptr),
     m_renderer      (device),
     m_hudItems      (device),
-    m_toggleEnabled(isHudToggleEnabled()) {
+    m_toggleEnabled(isHudToggleEnabled()),
+    m_hidden(m_hudItems.isExplicitlyEnabled("hide")) {
     addItem<HudVersionItem>("version", -1);
     addItem<HudDeviceInfoItem>("devinfo", -1, m_device);
     m_systemInfo = m_hudItems.addSystemInfoItems();
@@ -46,7 +47,8 @@ namespace dxvk::hud {
     // Visibility must keep updating when hidden, including without a winsys item.
     if (!empty() && (m_systemInfo || m_toggleEnabled) && now >= m_nextPresentationUpdate) {
       uint32_t feedback = queryWineDisplayFeedback();
-      m_hidden = m_toggleEnabled && (feedback & WineDisplayFeedbackHudHidden);
+      m_hidden = m_hudItems.isExplicitlyEnabled("hide")
+        != (m_toggleEnabled && (feedback & WineDisplayFeedbackHudVisibility));
       bool directScanout = feedback & WineDisplayFeedbackDirectScanout;
 
       HudPresentationColorSpace hudColorSpace = HudPresentationColorSpace::Sdr;
