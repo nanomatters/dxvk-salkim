@@ -96,9 +96,17 @@ namespace dxvk {
       e.buffers += range.bufferCount;
     }
 
-    // Reset entire block to avoid stale descriptors if
-    // anything goes wrong; may improve debuggability.
-    block = Block();
+    // Clear used entries to avoid stale descriptors. Unused slots are
+    // already empty, including when a larger block is reused for less work.
+    std::memset(block.descriptors.data(), 0,
+      block.descriptorCount * sizeof(block.descriptors[0]));
+    std::memset(static_cast<void*>(block.buffers.data()), 0,
+      block.bufferCount * sizeof(DxvkDescriptorCopyBuffer));
+    std::memset(static_cast<void*>(block.ranges.data()), 0,
+      block.rangeCount * sizeof(DxvkDescriptorCopyRange));
+    block.descriptorCount = 0u;
+    block.bufferCount = 0u;
+    block.rangeCount = 0u;
   }
 
 
