@@ -74,26 +74,41 @@ namespace dxvk {
 
 
   void DxvkDescriptorCopyWorker::processBlock(Block& block) {
-    // Local memory for uniform buffers descriptors in each set
+    // Local memory for a batch of uniform buffer descriptors
     std::array<DxvkDescriptor, MaxNumUniformBufferSlots> scratchDescriptors;
 
     DxvkDescriptorCopy e = { };
     e.descriptors = block.descriptors.data();
     e.buffers = block.buffers.data();
 
-    for (uint32_t i = 0u; i < block.rangeCount; i++) {
-      const auto& range = block.ranges[i];
+    for (uint32_t i = 0u; i < block.rangeCount;) {
+      // Batch complete sets that fit in scratch memory so all descriptors
+      // are copied to their destinations before that memory is reused.
+      uint32_t end = i;
+      uint32_t bufferCount = 0u;
+
+      do {
+        bufferCount += block.ranges[end++].bufferCount;
+      } while (end < block.rangeCount
+            && bufferCount + block.ranges[end].bufferCount <= scratchDescriptors.size());
 
       m_writeBufferDescriptorsFn(this,
-        scratchDescriptors.data(), range.bufferCount, e.buffers);
+        scratchDescriptors.data(), bufferCount, e.buffers);
 
-      for (uint32_t j = 0u; j < range.bufferCount; j++)
-        e.descriptors[e.buffers[j].indexInSet] = &scratchDescriptors[j];
+      uint32_t bufferIndex = 0u;
 
-      range.layout->update(range.descriptorMemory, e.descriptors);
+      for (; i < end; i++) {
+        const auto& range = block.ranges[i];
 
-      e.descriptors += range.descriptorCount;
-      e.buffers += range.bufferCount;
+        for (uint32_t j = 0u; j < range.bufferCount; j++)
+          e.descriptors[e.buffers[j].indexInSet] = &scratchDescriptors[bufferIndex + j];
+
+        range.layout->update(range.descriptorMemory, e.descriptors);
+
+        e.descriptors += range.descriptorCount;
+        e.buffers += range.bufferCount;
+        bufferIndex += range.bufferCount;
+      }
     }
 
     // Clear used entries to avoid stale descriptors. Unused slots are
