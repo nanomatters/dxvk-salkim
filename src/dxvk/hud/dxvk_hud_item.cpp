@@ -1626,8 +1626,13 @@ namespace dxvk::hud {
           HudPos              position) {
     std::lock_guard lock(m_mutex);
 
+    constexpr std::string_view label = "API: ";
+
     position.y += HudSmallFontSize;
-    renderer.drawText(HudSmallFontSize, position, 0xffffffffu, m_api);
+    renderer.drawText(HudSmallFontSize, position, HudGpuTelemetryLabelColor, label);
+    renderer.drawText(HudSmallFontSize,
+      { position.x + int32_t(renderer.textWidth(HudSmallFontSize, label)), position.y },
+      HudTelemetryValueColor, m_api);
 
     position.y += 8;
     return position;
