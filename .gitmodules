@@ -9,8 +9,8 @@
 	url = https://github.com/KhronosGroup/SPIRV-Headers.git
 [submodule "subprojects/libdisplay-info"]
 	path = subprojects/libdisplay-info
-	url = https://github.com/doitsujin/libdisplay-info.git
-	branch = windows
+	url = https://github.com/nanomatters/libdisplay-info.git
+	branch = salkim
 [submodule "subprojects/dxbc-spirv"]
 	path = subprojects/dxbc-spirv
 	url = https://github.com/doitsujin/dxbc-spirv.git
