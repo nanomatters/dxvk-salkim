@@ -98,11 +98,13 @@ namespace dxvk {
    *
    * Used for timestamp calibration. Reference times are given in units
    * of nanoseconds, except for QPC which is given in raw QPC ticks.
-   * QPC will be unavailable in dxvk-native environments.
+   * QPC will be unavailable in dxvk-native environments. Stage-local clocks
+   * are identified by both the time domain ID and the presentation stage.
    */
   struct PresenterTimeDomain {
     VkTimeDomainKHR timeDomain = VK_TIME_DOMAIN_MAX_ENUM_KHR;
     uint64_t timeDomainId = 0u;
+    VkPresentStageFlagsEXT presentStage = 0u;
     uint64_t referenceTime = 0u;
   };
 
@@ -533,6 +535,10 @@ namespace dxvk {
     void updateTimingMode();
 
     void recalibrateTimeDomains();
+
+    bool getTimeDomainCalibration(
+            uint32_t                  count,
+            PresenterTimeDomain*      domains);
 
     bool updatePresentTiming(uint64_t frameId);
 
