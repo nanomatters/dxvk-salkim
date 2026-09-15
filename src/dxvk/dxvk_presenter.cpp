@@ -1539,6 +1539,7 @@ namespace dxvk {
         auto& domain = info.domains.emplace_back();
         domain.timeDomain = domains[i];
         domain.timeDomainId = domainIds[i];
+        domain.presentStage = m_timingMode.presentStage;
 
         m_timingMode.timeDomainId = domainIds[i];
       }
@@ -1702,13 +1703,21 @@ namespace dxvk {
         swapchainInfo[i].timeDomainId = domains[i].timeDomainId;
 
         if (domains[i].timeDomain == VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT)
-          swapchainInfo[i].presentStage = m_timingMode.presentStage;
+          swapchainInfo[i].presentStage = domains[i].presentStage;
 
         calibrationInfo[i].pNext = &swapchainInfo[i];
       }
     }
 
-    // Retry calibration until we get reasonable precision (150us)
+    // Remember attempts as well as successes so failed calibration does not
+    // turn into a per-frame driver query. Keep the previous paired references
+    // on failure; newly added domains stay unusable until calibrated.
+    m_timingDomains->lastCalibration = dxvk::high_resolution_clock::now();
+
+    if (domains.empty())
+      return;
+
+    // Retry calibration until we get reasonable precision (1.5ms).
     constexpr uint32_t MaxAttempts = 5u;
     constexpr uint64_t MaxDeviation = 1500000u;
 
@@ -1718,21 +1727,78 @@ namespace dxvk {
       VkResult status = m_vkd->vkGetCalibratedTimestampsKHR(m_vkd->device(),
         domains.size(), calibrationInfo.data(), timestamps.data(), &maxDeviation);
 
-      if (status && !i) {
+      if (status) {
         Logger::warn(str::format("Presenter: Failed to calibrate timestamps: ", status));
-        return;
+        break;
       }
 
-      if (status || maxDeviation <= MaxDeviation)
+      // Only publish successful batches. A failed retry must not replace
+      // usable references with undefined output from the driver.
+      for (size_t j = 0u; j < domains.size(); j++)
+        domains[j].referenceTime = timestamps[j];
+
+      if (maxDeviation <= MaxDeviation)
         break;
     }
+  }
 
-    for (size_t i = 0u; i < domains.size(); i++)
-      domains[i].referenceTime = timestamps[i];
 
-    // Remember when we last calibrated everything so that we can periodically
-    // re-query. Clock drift is a real issue on certain hardware configurations.
-    m_timingDomains->lastCalibration = dxvk::high_resolution_clock::now();
+  bool Presenter::getTimeDomainCalibration(
+          uint32_t                  count,
+          PresenterTimeDomain*      domains) {
+    if (!m_timingDomains)
+      return false;
+
+    auto& cached = m_timingDomains->domains;
+    small_vector<size_t, 3u> indices(count);
+    bool changed = false;
+
+    for (uint32_t i = 0u; i < count; i++) {
+      auto& domain = domains[i];
+      bool stageLocal = domain.timeDomain == VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT;
+
+      if (!stageLocal)
+        domain.presentStage = 0u;
+      if (!stageLocal && domain.timeDomain != VK_TIME_DOMAIN_SWAPCHAIN_LOCAL_EXT)
+        domain.timeDomainId = 0u;
+
+      domain.referenceTime = 0u;
+
+      auto entry = std::find_if(cached.begin(), cached.end(),
+        [&] (const PresenterTimeDomain& item) {
+          return item.timeDomain == domain.timeDomain
+              && item.presentStage == domain.presentStage
+              && (!stageLocal || item.timeDomainId == domain.timeDomainId);
+        });
+
+      indices[i] = size_t(entry - cached.begin());
+
+      if (entry == cached.end()) {
+        cached.emplace_back(domain);
+        changed = true;
+      } else if (entry->timeDomainId != domain.timeDomainId) {
+        // Only stage-local domains may appear more than once in a
+        // calibration batch. Replace obsolete swapchain-local IDs.
+        *entry = domain;
+        changed = true;
+      }
+    }
+
+    uint64_t calibrationAgeNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      dxvk::high_resolution_clock::now() - m_timingDomains->lastCalibration).count();
+
+    // Keep one paired reference set for pacing, frame statistics and HUD.
+    // Clock drift requires periodic recalibration, not one query per report.
+    if (changed || calibrationAgeNs > 1000000000ull)
+      recalibrateTimeDomains();
+
+    bool valid = true;
+    for (uint32_t i = 0u; i < count; i++) {
+      domains[i].referenceTime = cached[indices[i]].referenceTime;
+      valid &= domains[i].referenceTime != 0u;
+    }
+
+    return valid;
   }
 
 
@@ -1914,9 +1980,16 @@ namespace dxvk {
     if (srcTimeDomain == dstTimeDomain && srcTimeDomainId == dstTimeDomainId)
       return srcTimestamp;
 
-    // Can't do anything if we can't calibrate time stamps
-    if (!m_timingDomains)
+    std::array<PresenterTimeDomain, 2u> domains = {{
+      { srcTimeDomain, srcTimeDomainId, m_timingMode.presentStage },
+      { dstTimeDomain, dstTimeDomainId, m_timingMode.presentStage },
+    }};
+
+    if (!getTimeDomainCalibration(domains.size(), domains.data()))
       return 0u;
+
+    uint64_t refTimeSrcDomain = domains[0].referenceTime;
+    uint64_t refTimeDstDomain = domains[1].referenceTime;
 
     // Determine tick frequency for QPC timestamps. Our internal high resolution
     // clock is QPC on Windows, so this should work whenever the time domain is
@@ -1927,94 +2000,6 @@ namespace dxvk {
     if (unlikely(!qpcFreq)) {
       qpcFreq = dxvk::high_resolution_clock::get_frequency();
       s_qpcFreq.store(qpcFreq, std::memory_order_relaxed);
-    }
-
-    // If the last calibration is older than a second, recalibrate.
-    uint64_t calibrationAgeNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
-      dxvk::high_resolution_clock::now() - m_timingDomains->lastCalibration).count();
-
-    if (calibrationAgeNs > 1000000000ull)
-      recalibrateTimeDomains();
-
-    // Check whether the source and destination time domains are known
-    // and compute the delta in terms of nanoseconds or QPC ticks.
-    uint64_t refTimeSrcDomain = 0u;
-    uint64_t refTimeDstDomain = 0u;
-
-    for (size_t i = 0u; i < m_timingDomains->domains.size(); i++) {
-      if (m_timingDomains->domains[i].timeDomain == srcTimeDomain
-       && m_timingDomains->domains[i].timeDomainId == srcTimeDomainId)
-        refTimeSrcDomain = m_timingDomains->domains[i].referenceTime;
-
-      if (m_timingDomains->domains[i].timeDomain == dstTimeDomain
-       && m_timingDomains->domains[i].timeDomainId == dstTimeDomainId)
-        refTimeDstDomain = m_timingDomains->domains[i].referenceTime;
-    }
-
-    // If we couldn't find one of the time domains, try to calibrate
-    if (!refTimeSrcDomain || !refTimeDstDomain) {
-      std::array<VkSwapchainCalibratedTimestampInfoEXT, 2u> swapchainInfo = {{
-        VkSwapchainCalibratedTimestampInfoEXT { VK_STRUCTURE_TYPE_SWAPCHAIN_CALIBRATED_TIMESTAMP_INFO_EXT },
-        VkSwapchainCalibratedTimestampInfoEXT { VK_STRUCTURE_TYPE_SWAPCHAIN_CALIBRATED_TIMESTAMP_INFO_EXT },
-      }};
-
-      std::array<VkCalibratedTimestampInfoKHR, 2u> calibrationInfo = {{
-        VkCalibratedTimestampInfoKHR { VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR },
-        VkCalibratedTimestampInfoKHR { VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR },
-      }};
-
-      calibrationInfo[0].timeDomain = srcTimeDomain;
-      calibrationInfo[1].timeDomain = dstTimeDomain;
-
-      if (srcTimeDomain == VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT || srcTimeDomain == VK_TIME_DOMAIN_SWAPCHAIN_LOCAL_EXT) {
-        calibrationInfo[0].pNext = &swapchainInfo[0];
-
-        swapchainInfo[0].swapchain = m_swapchain;
-        swapchainInfo[0].presentStage = m_timingMode.presentStage;
-        swapchainInfo[0].timeDomainId = srcTimeDomainId;
-      }
-
-      if (dstTimeDomain == VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT || dstTimeDomain == VK_TIME_DOMAIN_SWAPCHAIN_LOCAL_EXT) {
-        calibrationInfo[1].pNext = &swapchainInfo[1];
-
-        swapchainInfo[1].swapchain = m_swapchain;
-        swapchainInfo[1].presentStage = m_timingMode.presentStage;
-        swapchainInfo[1].timeDomainId = dstTimeDomainId;
-      }
-
-      // Try to get reference timestamps for the two domains
-      std::array<uint64_t, 2u> timestamps = { };
-
-      uint64_t maxDeviation = 0u;
-
-      VkResult status = m_vkd->vkGetCalibratedTimestampsKHR(m_vkd->device(),
-        calibrationInfo.size(), calibrationInfo.data(), timestamps.data(), &maxDeviation);
-
-      if (status) {
-        Logger::err(str::format("Presenter: Failed to map timestamp from ",
-          srcTimeDomain, "@", srcTimeDomainId," to domain ",
-          dstTimeDomain, "@", dstTimeDomainId, ": ", status));
-        return 0u;
-      }
-
-      // On success, add the domains to the domain list as necessary
-      // and recalibrate all known domains for subsequent steps
-      if (!refTimeSrcDomain) {
-        auto& domain = m_timingDomains->domains.emplace_back();
-        domain.timeDomain = srcTimeDomain;
-        domain.timeDomainId = srcTimeDomainId;
-      }
-
-      if (!refTimeDstDomain) {
-        auto& domain = m_timingDomains->domains.emplace_back();
-        domain.timeDomain = dstTimeDomain;
-        domain.timeDomainId = dstTimeDomainId;
-      }
-
-      refTimeSrcDomain = timestamps[0];
-      refTimeDstDomain = timestamps[1];
-
-      recalibrateTimeDomains();
     }
 
     // Compute time delta in terms of the destination time domain
@@ -2075,55 +2060,23 @@ namespace dxvk {
       return true;
     }
 
-    std::array<VkCalibratedTimestampInfoKHR, 3> infos = { };
-    std::array<VkSwapchainCalibratedTimestampInfoEXT, 2> swapchainInfos = { };
-    std::array<uint64_t, 3> timestamps = { };
-    uint32_t count = timeDomain == VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT ? 3u : 2u;
+    std::array<PresenterTimeDomain, 3u> domains = {{
+      { hostDomain },
+      { timeDomain, timeDomainId, VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT },
+      { timeDomain, timeDomainId, m_presentTelemetryStage },
+    }};
 
-    for (uint32_t i = 0; i < count; i++)
-      infos[i].sType = VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR;
-
-    infos[0].timeDomain = hostDomain;
-    infos[1].timeDomain = timeDomain;
-
-    if (timeDomain == VK_TIME_DOMAIN_PRESENT_STAGE_LOCAL_EXT) {
-      infos[2].timeDomain = timeDomain;
-
-      swapchainInfos[0].sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CALIBRATED_TIMESTAMP_INFO_EXT;
-      swapchainInfos[0].swapchain = m_swapchain;
-      swapchainInfos[0].presentStage = VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT;
-      swapchainInfos[0].timeDomainId = timeDomainId;
-      infos[1].pNext = &swapchainInfos[0];
-
-      swapchainInfos[1].sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CALIBRATED_TIMESTAMP_INFO_EXT;
-      swapchainInfos[1].swapchain = m_swapchain;
-      swapchainInfos[1].presentStage = m_presentTelemetryStage;
-      swapchainInfos[1].timeDomainId = timeDomainId;
-      infos[2].pNext = &swapchainInfos[1];
-    } else if (timeDomain == VK_TIME_DOMAIN_SWAPCHAIN_LOCAL_EXT) {
-      swapchainInfos[0].sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CALIBRATED_TIMESTAMP_INFO_EXT;
-      swapchainInfos[0].swapchain = m_swapchain;
-      swapchainInfos[0].timeDomainId = timeDomainId;
-      infos[1].pNext = &swapchainInfos[0];
-    }
-
-    uint64_t maxDeviation = 0u;
-    VkResult vr = m_vkd->vkGetCalibratedTimestampsKHR(
-      m_vkd->device(), count, infos.data(), timestamps.data(), &maxDeviation);
-
-    if (vr != VK_SUCCESS || !timestamps[0] || !timestamps[1] ||
-        (count == 3u && !timestamps[2]))
+    if (!getTimeDomainCalibration(domains.size(), domains.data()))
       return false;
 
-    uint64_t hostTimeNs = presentTelemetryCounterToNs(timestamps[0]);
+    uint64_t hostTimeNs = presentTelemetryCounterToNs(domains[0].referenceTime);
 
     if (queueTime && !applyPresentTelemetryCalibration(
-        hostTimeNs, timestamps[1], queueTime, queueTimeNs))
+        hostTimeNs, domains[1].referenceTime, queueTime, queueTimeNs))
       return false;
 
-    uint64_t completeCalibration = count == 3u ? timestamps[2] : timestamps[1];
     return !completeTime || applyPresentTelemetryCalibration(
-      hostTimeNs, completeCalibration, completeTime, completeTimeNs);
+      hostTimeNs, domains[2].referenceTime, completeTime, completeTimeNs);
   }
 
 
