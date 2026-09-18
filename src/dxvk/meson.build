@@ -86,6 +86,7 @@ dxvk_src = [
 
   'hud/dxvk_hud.cpp',
   'hud/dxvk_hud_font.cpp',
+  'hud/dxvk_hud_graph.cpp',
   'hud/dxvk_hud_info.cpp',
   'hud/dxvk_hud_item.cpp',
   'hud/dxvk_hud_renderer.cpp',

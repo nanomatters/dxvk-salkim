@@ -98,8 +98,9 @@ enum DXGI_VK_PRESENT_TELEMETRY_VALID : UINT {
  *
  * Durations use nanoseconds. Each valid field contains its latest available
  * value. PresentId is the newest processed report, and CompletionStage
- * identifies the best available presentation stage used as PresentComplete.
- * DisplayIntervalNs is valid only for first pixel visible timestamps.
+ * identifies the presentation stage used as PresentComplete, preferring first
+ * pixel out. DisplayIntervalNs measures consecutive first pixel out timestamps.
+ * Older implementations use first pixel visible. Check CompletionStage.
  */
 struct DXGI_VK_PRESENT_TELEMETRY {
   UINT   StructSize;
@@ -114,6 +115,14 @@ struct DXGI_VK_PRESENT_TELEMETRY {
 };
 
 static_assert(sizeof(DXGI_VK_PRESENT_TELEMETRY) == 56);
+
+// One complete report, never merged with values from another present.
+struct DXGI_VK_PRESENT_TELEMETRY_FRAME {
+  DXGI_VK_PRESENT_TELEMETRY Data;
+  UINT64 PresentTimeNs;
+};
+
+static_assert(sizeof(DXGI_VK_PRESENT_TELEMETRY_FRAME) == 64);
 
 
 /**
@@ -300,6 +309,18 @@ IDXGIVkSwapChainPresentTelemetry : public IUnknown {
 
   virtual HRESULT STDMETHODCALLTYPE GetData(
           DXGI_VK_PRESENT_TELEMETRY* pData) = 0;
+};
+
+
+MIDL_INTERFACE("77b7d6c1-49c8-49e1-a5ea-96c90efb042a")
+IDXGIVkSwapChainPresentTelemetry1 : public IDXGIVkSwapChainPresentTelemetry {
+  // Drains up to *pCount reports without waiting. NowNs and PresentTimeNs
+  // share a host clock. Generation changes when the timing history resets.
+  virtual HRESULT STDMETHODCALLTYPE GetFrameData(
+          UINT*                             pCount,
+          DXGI_VK_PRESENT_TELEMETRY_FRAME*   pFrames,
+          UINT64*                           pNowNs,
+          UINT64*                           pGeneration) = 0;
 };
 
 
@@ -666,6 +687,7 @@ __CRT_UUID_DECL(IDXGIVkSwapChain2,         0xaed91093,0xe02e,0x458c,0xbd,0xef,0x
 __CRT_UUID_DECL(IDXGIVkSwapChain3,         0xfa25651a,0xae62,0x4ddd,0x90,0x86,0x29,0xea,0x31,0x44,0x82,0x0a);
 __CRT_UUID_DECL(IDXGIVkSwapChainHud,       0xdeb1f1b9,0x48c7,0x4310,0xb5,0xa9,0x3b,0x92,0xf5,0x93,0x02,0x3f);
 __CRT_UUID_DECL(IDXGIVkSwapChainPresentTelemetry, 0x0363406f,0x8d3b,0x43d9,0x98,0x4f,0x5c,0x9c,0xf8,0xa2,0xcc,0x0b);
+__CRT_UUID_DECL(IDXGIVkSwapChainPresentTelemetry1, 0x77b7d6c1,0x49c8,0x49e1,0xa5,0xea,0x96,0xc9,0x0e,0xfb,0x04,0x2a);
 __CRT_UUID_DECL(IDXGIVkSwapChainFactory,   0xe7d6c3ca,0x23a0,0x4e08,0x9f,0x2f,0xea,0x52,0x31,0xdf,0x66,0x33);
 __CRT_UUID_DECL(ID3DLowLatencyDevice,      0xf3112584,0x41f9,0x348d,0xa5,0x9b,0x00,0xb7,0xe1,0xd2,0x85,0xd6);
 #endif

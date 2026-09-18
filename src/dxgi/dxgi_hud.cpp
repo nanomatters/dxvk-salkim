@@ -66,7 +66,7 @@ namespace dxvk {
     m_systemInfo = m_hudItems.addSystemInfoItems();
     m_hudItems.addCpuTelemetryItems(adapter);
     m_hudItems.addGpuTelemetryItems(adapter);
-    m_hudItems.add<hud::HudFpsItem>("fps", -1);
+    m_hudItems.addFpsItems();
     m_hudItems.add<hud::HudFpsLowItem>("fps_lows", -1,
       m_hudItems.fpsLowsWindowNs());
     m_hudItems.add<hud::HudClientApiItem>("api", 1, "D3D12");
@@ -129,6 +129,16 @@ namespace dxvk {
 
     HRESULT hr = presenter->SetHudData(&data);
 
+    // Older vkd3d HUD interfaces reject larger batches. Keep the HUD working
+    // within their original limit instead of disabling it after the first graph.
+    if (hr == E_INVALIDARG && data.VertexCount > LegacyMaxVertices) {
+      m_vertexLimit = LegacyMaxVertices;
+      data.VertexCount = uint32_t(m_vertexLimit / 6 * 6);
+      hr = presenter->SetHudData(&data);
+      if (SUCCEEDED(hr))
+        Logger::warn("DXGI HUD: Older presenter limits HUD to 8192 vertices. Large layouts may be truncated");
+    }
+
     if (FAILED(hr)) {
       Logger::warn(str::format("DXGI HUD: IDXGIVkSwapChainHud::SetHudData failed with error ", hr));
       m_failed = true;
@@ -137,7 +147,7 @@ namespace dxvk {
 
 
   void DxgiHud::drawRect(hud::HudPos position, hud::HudPos size, uint32_t color) {
-    if (size.x <= 0 || size.y <= 0 || !(color >> 24) || MaxVertices - m_vertices.size() < 6)
+    if (size.x <= 0 || size.y <= 0 || !(color >> 24) || m_vertices.size() + 6 > m_vertexLimit)
       return;
 
     const auto& font = hud::g_hudFont;
@@ -164,13 +174,13 @@ namespace dxvk {
           hud::HudPos             position,
           uint32_t                color,
           std::string_view        text) {
-    if (text.empty() || m_vertices.size() >= MaxVertices)
+    if (text.empty() || m_vertices.size() + 6 > m_vertexLimit)
       return;
 
     const auto& font = hud::g_hudFont;
     float sizeFactor = float(size) / float(font.size);
 
-    for (size_t i = 0; i < text.size() && MaxVertices - m_vertices.size() >= 6; i++) {
+    for (size_t i = 0; i < text.size() && m_vertices.size() + 6 <= m_vertexLimit; i++) {
       uint32_t codePoint = uint8_t(text[i]);
       const hud::HudGlyph* glyph = nullptr;
 

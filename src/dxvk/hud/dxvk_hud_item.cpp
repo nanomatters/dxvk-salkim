@@ -51,14 +51,15 @@ namespace dxvk::hud {
     struct HudPresentTelemetryMetricInfo {
       const char* option;
       const char* label;
+      const char* graphOption;
     };
 
     constexpr std::array<HudPresentTelemetryMetricInfo,
       size_t(HudPresentTelemetryMetric::Count)> HudPresentTelemetryMetrics = {{
-      { "latency.queue",    "Queue operations:" },
-      { "latency.display",  "Display queue:" },
-      { "latency.present",  "Present latency:" },
-      { "latency.interval", "Display interval:" },
+      { "latency.queue",    "Queue latency:",    "latency.queue.graph" },
+      { "latency.display",  "Output latency:",   "latency.display.graph" },
+      { "latency.present",  "Present latency:",  "latency.present.graph" },
+      { "latency.interval", "Output interval:",  "latency.interval.graph" },
     }};
 
     constexpr std::array<HudTelemetryMetricInfo,
@@ -253,6 +254,10 @@ namespace dxvk::hud {
       // Panels are emitted to the real renderer after laying out the text.
       void drawRect(HudPos, HudPos, uint32_t) override { }
 
+      void drawGraph(HudPos position, const HudGraph& graph) override {
+        m_draws.push_back({ 0, position, 0, {}, m_line, m_bottom, &graph });
+      }
+
       void setLine(size_t line) {
         m_line = line;
       }
@@ -297,8 +302,12 @@ namespace dxvk::hud {
         }
 
         // All panels precede all text, even if the top and bottom overlap.
-        for (const auto& draw : m_draws)
-          renderer.drawText(draw.size, draw.position, draw.color, draw.text);
+        for (const auto& draw : m_draws) {
+          if (draw.graph)
+            renderer.drawGraph(draw.position, *draw.graph);
+          else
+            renderer.drawText(draw.size, draw.position, draw.color, draw.text);
+        }
       }
 
     private:
@@ -310,6 +319,7 @@ namespace dxvk::hud {
         std::string text;
         size_t line;
         bool bottom;
+        const HudGraph* graph = nullptr;
       };
 
       std::vector<Draw> m_draws;
@@ -338,7 +348,8 @@ namespace dxvk::hud {
             left = std::min<int64_t>(left, draw.position.x);
             right = std::max<int64_t>(right,
               int64_t(draw.position.x) + getTextWidth(draw));
-            lastBaseline = std::max<int64_t>(lastBaseline, draw.position.y);
+            lastBaseline = std::max<int64_t>(lastBaseline,
+              int64_t(draw.position.y) + graphDescent(draw));
           }
 
           int64_t x = center && haveWidth
@@ -369,15 +380,31 @@ namespace dxvk::hud {
 
         constexpr int64_t lineHeight = HudLineHeight;
         size_t lastLine = m_draws[drawEnd - 1].line;
+        int64_t totalExtraHeight = 0, usedExtraHeight = 0;
+
+        // Graphs are single layout elements, with a heading baseline shared
+        // with text and extra height reserved below it for the plot.
+        for (size_t i = drawFirst; i < drawEnd;) {
+          size_t line = m_draws[i].line;
+          int64_t extra = 0;
+          do {
+            extra = std::max(extra, graphDescent(m_draws[i++]));
+          } while (i < drawEnd && m_draws[i].line == line);
+          totalExtraHeight += extra;
+        }
 
         for (size_t first = drawFirst; first < drawEnd;) {
           size_t line = m_draws[first].line;
           size_t lineEnd = first;
           int64_t totalWidth = -gap;
+          int64_t extraHeight = 0;
 
           while (lineEnd < drawEnd && m_draws[lineEnd].line == line) {
             int64_t left, right;
-            lineEnd = getLineBounds(lineEnd, drawEnd, &left, &right);
+            size_t next = getLineBounds(lineEnd, drawEnd, &left, &right);
+            for (size_t i = lineEnd; i < next; i++)
+              extraHeight = std::max(extraHeight, graphDescent(m_draws[i]));
+            lineEnd = next;
             totalWidth += right - left + gap;
           }
 
@@ -386,8 +413,8 @@ namespace dxvk::hud {
             : 8;
           int64_t lineOffset = int64_t(bottom ? lastLine - line : line);
           int64_t y = bottom && haveHeight
-            ? logicalHeight - 20 - lineOffset * lineHeight
-            : 8 + HudFontSize + lineOffset * lineHeight;
+            ? logicalHeight - 20 - lineOffset * lineHeight - (totalExtraHeight - usedExtraHeight)
+            : 8 + HudFontSize + lineOffset * lineHeight + usedExtraHeight;
 
           for (size_t i = first; i < lineEnd;) {
             int64_t left, right;
@@ -411,21 +438,35 @@ namespace dxvk::hud {
             i = end;
           }
 
+          usedExtraHeight += extraHeight;
           first = lineEnd;
         }
       }
 
       int64_t getTextWidth(const Draw& draw) const {
-        return textWidth(draw.size, draw.text);
+        return draw.graph ? draw.graph->size().x : textWidth(draw.size, draw.text);
+      }
+
+      static int64_t graphDescent(const Draw& draw) {
+        return draw.graph ? draw.graph->size().y - HudFontSize : 0;
+      }
+
+      HudTextBounds getBounds(const Draw& draw) const {
+        if (!draw.graph)
+          return textBounds(draw.size, draw.position, draw.text);
+
+        auto size = draw.graph->size();
+        float left = float(draw.position.x), top = float(draw.position.y) - HudFontSize;
+        return { left, top, left + size.x, top + size.y };
       }
 
       void drawBackground(HudRenderer& renderer, size_t first, size_t end,
                           int64_t width, int64_t height, float opacity) const {
         const auto& firstDraw = m_draws[first];
-        auto bounds = textBounds(firstDraw.size, firstDraw.position, firstDraw.text);
+        auto bounds = getBounds(firstDraw);
         for (size_t i = first + 1; i < end; i++) {
           const auto& draw = m_draws[i];
-          auto box = textBounds(draw.size, draw.position, draw.text);
+          auto box = getBounds(draw);
           bounds.left = std::min(bounds.left, box.left);
           bounds.top = std::min(bounds.top, box.top);
           bounds.right = std::max(bounds.right, box.right);
@@ -725,20 +766,28 @@ namespace dxvk::hud {
     uint64_t metricMask = getEnabledMetricMask(
       items, "present_latency", HudPresentTelemetryMetrics);
 
-    if (!metricMask)
+    uint32_t graphMask = 0;
+    for (size_t i = 0; i < HudPresentTelemetryMetrics.size(); i++) {
+      if (items.isEnabled(HudPresentTelemetryMetrics[i].graphOption))
+        graphMask |= 1u << i;
+    }
+
+    if (!metricMask && !graphMask)
       return;
 
-    Rc<HudPresentTelemetryData> data = new HudPresentTelemetryData(presenter);
+    Rc<HudPresentTelemetryData> data = new HudPresentTelemetryData(presenter, graphMask, items.graphOptions());
 
     if (group) {
       items.add<HudPresentTelemetryItem>("present_latency", -1,
         data, HudPresentTelemetryMetric::Count, metricMask);
-      return;
     }
 
     for (size_t i = 0; i < HudPresentTelemetryMetrics.size(); i++) {
-      if (metricMask & (uint64_t(1) << i))
+      if (!group && (metricMask & (uint64_t(1) << i)))
         items.add<HudPresentTelemetryItem>(HudPresentTelemetryMetrics[i].option, -1,
+          data, HudPresentTelemetryMetric(i));
+      if (graphMask & (1u << i))
+        items.add<HudPresentTelemetryGraphItem>(HudPresentTelemetryMetrics[i].graphOption, -1,
           data, HudPresentTelemetryMetric(i));
     }
   }
@@ -758,7 +807,7 @@ namespace dxvk::hud {
 
   bool HudItemSet::presentTelemetryEnabled() const {
     for (const auto& metric : HudPresentTelemetryMetrics) {
-      if (isGroupItemEnabled("present_latency", metric.option))
+      if (isGroupItemEnabled("present_latency", metric.option) || isEnabled(metric.graphOption))
         return true;
     }
 
@@ -908,23 +957,30 @@ namespace dxvk::hud {
 
 
   HudPresentTelemetryData::HudPresentTelemetryData(
-          Presenter* presenter)
+          Presenter* presenter, uint32_t graphMask, const HudGraphOptions& options)
   : m_presenter(presenter) {
     m_presenter->setPresentTelemetryEnabled(true);
     m_values.fill("--");
+    initGraphs(graphMask, options);
   }
 
 
   HudPresentTelemetryData::HudPresentTelemetryData(
-          IDXGIVkSwapChainPresentTelemetry* presenter)
+          IDXGIVkSwapChainPresentTelemetry* presenter, uint32_t graphMask, const HudGraphOptions& options)
   : m_dxgiPresenter(presenter) {
     m_dxgiPresenter->AddRef();
     m_dxgiPresenter->SetEnabled(TRUE);
     m_values.fill("--");
+    initGraphs(graphMask, options);
+    if (graphMask)
+      m_dxgiPresenter->QueryInterface(__uuidof(IDXGIVkSwapChainPresentTelemetry1),
+        reinterpret_cast<void**>(&m_dxgiHistory));
   }
 
 
   HudPresentTelemetryData::~HudPresentTelemetryData() {
+    if (m_dxgiHistory)
+      m_dxgiHistory->Release();
     if (m_presenter)
       m_presenter->setPresentTelemetryEnabled(false);
 
@@ -937,6 +993,11 @@ namespace dxvk::hud {
 
   void HudPresentTelemetryData::update(
           dxvk::high_resolution_clock::time_point time) {
+    if (m_hasGraphs && time != m_lastGraphUpdate) {
+      m_lastGraphUpdate = time;
+      updateGraphs(time);
+    }
+
     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
       time - m_lastUpdate).count();
 
@@ -975,7 +1036,9 @@ namespace dxvk::hud {
     if (data.ValidFields & DXGI_VK_PRESENT_TELEMETRY_PRESENT)
       m_values[presentTelemetryMetricIndex(HudPresentTelemetryMetric::Present)] =
         formatNanoseconds(data.PresentDurationNs);
-    if (data.ValidFields & DXGI_VK_PRESENT_TELEMETRY_INTERVAL)
+    // Older presenters report visible-to-visible intervals in this field.
+    if ((data.ValidFields & DXGI_VK_PRESENT_TELEMETRY_INTERVAL) &&
+        data.CompletionStage == VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT)
       m_values[presentTelemetryMetricIndex(HudPresentTelemetryMetric::Interval)] =
         formatNanoseconds(data.DisplayIntervalNs);
   }
@@ -984,6 +1047,119 @@ namespace dxvk::hud {
   const std::string& HudPresentTelemetryData::value(
           HudPresentTelemetryMetric metric) const {
     return m_values[presentTelemetryMetricIndex(metric)];
+  }
+
+
+  void HudPresentTelemetryData::initGraphs(uint32_t mask, HudGraphOptions options) {
+    for (size_t i = 0; i < m_graphs.size(); i++) {
+      if (!(mask & (1u << i)))
+        continue;
+      std::string label = HudPresentTelemetryMetrics[i].label;
+      label.pop_back();
+      m_graphs[i] = std::make_unique<HudGraph>(label, "ms", HudPresentTelemetryLabelColor, options);
+      m_hasGraphs = true;
+    }
+  }
+
+
+  const HudGraph& HudPresentTelemetryData::graph(HudPresentTelemetryMetric metric) const {
+    return *m_graphs[presentTelemetryMetricIndex(metric)];
+  }
+
+
+  void HudPresentTelemetryData::updateGraphs(dxvk::high_resolution_clock::time_point time) {
+    std::array<DXGI_VK_PRESENT_TELEMETRY_FRAME, 128> frames;
+    UINT count = frames.size();
+    UINT64 sourceNow = 0, generation = 0;
+    int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count();
+
+    if (m_presenter) {
+      std::array<PresenterTelemetryFrame, 128> reports;
+      uint64_t clock = 0, epoch = 0;
+      count = m_presenter->getPresentTelemetryFrames(reports.size(), reports.data(), clock, epoch);
+      sourceNow = clock;
+      generation = epoch;
+      for (UINT i = 0; i < count; i++) {
+        const auto& r = reports[i].data;
+        frames[i] = { { sizeof(DXGI_VK_PRESENT_TELEMETRY), r.validFields, r.presentId,
+          r.queueDurationNs, r.displayDurationNs, r.presentDurationNs,
+          r.displayIntervalNs, r.completionStage, 0 }, reports[i].presentTimeNs };
+      }
+    } else if (!m_dxgiHistory || FAILED(m_dxgiHistory->GetFrameData(
+        &count, frames.data(), &sourceNow, &generation))) {
+      count = 0;
+    }
+
+    if (generation != m_generation) {
+      for (auto& graph : m_graphs) {
+        if (graph) graph->clear();
+      }
+      m_generation = generation;
+      m_completionStage = 0;
+      m_stageTimeNs = 0;
+    }
+
+    // Drivers can deliver completed reports out of order or several at once.
+    std::sort(frames.begin(), frames.begin() + count, [] (const auto& a, const auto& b) {
+      return a.PresentTimeNs < b.PresentTimeNs;
+    });
+
+    for (UINT j = 0; j < count; j++) {
+      const auto& frame = frames[j];
+      const auto& data = frame.Data;
+      if (!data.PresentId || !frame.PresentTimeNs || sourceNow < frame.PresentTimeNs ||
+          sourceNow - frame.PresentTimeNs > uint64_t(now))
+        continue;
+
+      int64_t sampleTime = now - int64_t(sourceNow - frame.PresentTimeNs);
+      if (m_completionStage && data.CompletionStage != m_completionStage) {
+        // A late report from the previous stage must not reset newer history.
+        if (frame.PresentTimeNs < m_stageTimeNs)
+          continue;
+        for (auto& graph : m_graphs) {
+          if (graph) graph->clear();
+        }
+      }
+      m_completionStage = data.CompletionStage;
+      m_stageTimeNs = std::max(m_stageTimeNs, uint64_t(frame.PresentTimeNs));
+      const uint64_t values[] = { data.QueueDurationNs, data.DisplayDurationNs,
+        data.PresentDurationNs, data.DisplayIntervalNs };
+
+      for (size_t i = 0; i < m_graphs.size(); i++) {
+        if (!m_graphs[i]) continue;
+        bool valid = data.ValidFields & (1u << i);
+        if (i == presentTelemetryMetricIndex(HudPresentTelemetryMetric::Interval))
+          valid &= data.CompletionStage == VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT;
+        if (valid)
+          m_graphs[i]->addSample(sampleTime, float(double(values[i]) / 1'000'000.0));
+        else
+          m_graphs[i]->addGap(sampleTime);
+      }
+    }
+
+    for (auto& graph : m_graphs) {
+      if (graph) graph->advance(now);
+    }
+  }
+
+
+  HudPresentTelemetryGraphItem::HudPresentTelemetryGraphItem(
+    const Rc<HudPresentTelemetryData>& data, HudPresentTelemetryMetric metric)
+  : m_data(data), m_metric(metric) { }
+
+
+  void HudPresentTelemetryGraphItem::update(dxvk::high_resolution_clock::time_point time) {
+    m_data->update(time);
+  }
+
+
+  HudPos HudPresentTelemetryGraphItem::render(const Rc<DxvkCommandList>& ctx,
+    const HudPipelineKey& key, const HudOptions& options, HudRenderer& renderer, HudPos position) {
+    const auto& graph = m_data->graph(m_metric);
+    position.y += HudFontSize;
+    renderer.drawGraph(position, graph);
+    position.y += graph.size().y - HudFontSize + 8;
+    return position;
   }
 
 
@@ -1141,6 +1317,9 @@ namespace dxvk::hud {
 
     auto time = dxvk::high_resolution_clock::now();
 
+    if (m_fpsData)
+      m_fpsData->update(time);
+
     for (const auto& item : m_items)
       item->update(time);
   }
@@ -1223,7 +1402,33 @@ namespace dxvk::hud {
       value = std::stof(str);
     } catch (const std::invalid_argument&) {
       return;
+    } catch (const std::out_of_range&) {
+      return;
     }
+  }
+
+
+  void HudItemSet::addFpsItems() {
+    if (!isEnabled("fps") && !isEnabled("fps.graph"))
+      return;
+
+    m_fpsData = new HudFpsData();
+    add<HudFpsItem>("fps", -1, m_fpsData);
+
+    if (!isEnabled("fps.graph"))
+      return;
+
+    add<HudFpsGraphItem>("fps.graph", -1, m_fpsData, graphOptions());
+  }
+
+
+  HudGraphOptions HudItemSet::graphOptions() {
+    HudGraphOptions options;
+    options.width = getOption<float>("graph_width", options.width);
+    options.height = getOption<float>("graph_height", options.height);
+    options.history = getOption<float>("graph_history", options.history);
+    options.maximum = getOption<float>("graph_max", options.maximum);
+    return options;
   }
 
 
@@ -1691,23 +1896,65 @@ namespace dxvk::hud {
   }
 
 
-  HudFpsItem::HudFpsItem() { }
-  HudFpsItem::~HudFpsItem() { }
+  void HudFpsData::update(dxvk::high_resolution_clock::time_point time) {
+    int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      time.time_since_epoch()).count();
+    if (now <= m_lastFrameTimeNs)
+      return;
+    m_lastFrameTimeNs = now;
 
-
-  void HudFpsItem::update(dxvk::high_resolution_clock::time_point time) {
-    m_frameCount += 1;
-
-    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(time - m_lastUpdate);
-
-    if (elapsed.count() >= UpdateInterval) {
-      int64_t fps = (10'000'000ll * m_frameCount) / elapsed.count();
-
-      m_frameRate = str::format(fps / 10, ".", fps % 10);
-      m_frameCount = 0;
-      m_lastUpdate = time;
+    if (m_firstFrameTimeNs < 0) {
+      m_firstFrameTimeNs = now;
+      m_lastTextUpdateNs = now;
+    } else {
+      // Count every frame in the text's reporting interval, independently of
+      // the graph's shorter rolling window.
+      m_textFrameCount++;
+      int64_t elapsed = now - m_lastTextUpdateNs;
+      if (elapsed >= TextUpdateIntervalNs) {
+        uint64_t fps = 10'000'000ull * m_textFrameCount / (elapsed / 1000);
+        m_text = str::format(fps / 10, ".", fps % 10);
+        m_textFrameCount = 0;
+        m_lastTextUpdateNs = now;
+      }
     }
+
+    // Keep the frame interval crossing the start of the rolling window.
+    int64_t start = now - WindowDurationNs;
+    while (m_sampleCount > 1 && m_frameTimes[(m_sampleHead + 1) % MaxSamples] <= start) {
+      m_sampleHead = (m_sampleHead + 1) % MaxSamples;
+      m_sampleCount--;
+    }
+
+    // Bound storage at extreme frame rates, using the newest intervals.
+    if (m_sampleCount == MaxSamples) {
+      m_sampleHead = (m_sampleHead + 1) % MaxSamples;
+      m_sampleCount--;
+    }
+    m_frameTimes[(m_sampleHead + m_sampleCount++) % MaxSamples] = now;
+
+    // Wait for a full graph window before producing the first sample.
+    if (now - m_firstFrameTimeNs < WindowDurationNs)
+      return;
+
+    double frames = double(m_sampleCount - 1);
+    int64_t first = m_frameTimes[m_sampleHead];
+    if (first < start) {
+      // Weight the boundary interval to avoid whole-frame steps as it expires.
+      int64_t next = m_frameTimes[(m_sampleHead + 1) % MaxSamples];
+      frames -= double(start - first) / double(next - first);
+    } else {
+      start = first;
+    }
+
+    uint64_t fps = uint64_t(std::round(10'000'000'000.0 * frames / double(now - start)));
+    m_value = float(fps) / 10.0f;
+    m_sampleTimeNs = now;
   }
+
+
+  HudFpsItem::HudFpsItem(const Rc<HudFpsData>& data)
+  : m_data(data) { }
 
 
   HudPos HudFpsItem::render(
@@ -1719,7 +1966,7 @@ namespace dxvk::hud {
     position.y += HudFontSize;
 
     drawLabelValue(renderer, position, options, 0xff2020ffu,
-      "FPS:", m_frameRate, "FPS:");
+      "FPS:", m_data->text(), "FPS:");
 
     position.y += 8;
     return position;
@@ -1853,6 +2100,30 @@ namespace dxvk::hud {
       "0.1% low:", m_pointOnePercent, "0.1% low:");
 
     position.y += 8;
+    return position;
+  }
+
+
+  HudFpsGraphItem::HudFpsGraphItem(const Rc<HudFpsData>& data, const HudGraphOptions& options)
+  : m_data(data), m_graph("FPS", "", 0xff6060ffu, options) { }
+
+
+  void HudFpsGraphItem::update(dxvk::high_resolution_clock::time_point time) {
+    if (m_data->sampleTimeNs() == m_sampleTimeNs)
+      return;
+
+    m_sampleTimeNs = m_data->sampleTimeNs();
+    m_graph.addSample(m_sampleTimeNs, m_data->value());
+    m_graph.setValueText(m_data->text());
+  }
+
+
+  HudPos HudFpsGraphItem::render(
+    const Rc<DxvkCommandList>& ctx, const HudPipelineKey& key,
+    const HudOptions& options, HudRenderer& renderer, HudPos position) {
+    position.y += HudFontSize;
+    renderer.drawGraph(position, m_graph);
+    position.y += m_graph.size().y - HudFontSize + 8;
     return position;
   }
 
