@@ -499,7 +499,7 @@ namespace dxvk {
       // Redraw everything if the HUD is active since we don't
       // keep track of the exact screen areas there. Likewise,
       // nope out if there is any scaling going on.
-      if (!m_hasHud && dstRect.extent != srcRect.extent) {
+      if (!m_hasHud && dstRect.extent == srcRect.extent) {
         VkRect2D bounds = dstRect;
         bounds.offset.x -= srcRect.offset.x;
         bounds.offset.y -= srcRect.offset.y;
