@@ -26,6 +26,7 @@ namespace dxvk::hud {
 
   class HudSystemInfoItem;
   class HudFpsData;
+  class HudPresentTelemetryData;
 
   /**
    * \brief HUD item
@@ -132,7 +133,7 @@ namespace dxvk::hud {
     void addReflexItems(
             ID3DLowLatencyDevice* lowLatencyDevice);
 
-    void addPresentTelemetryItems(
+    Rc<HudPresentTelemetryData> addPresentTelemetryItems(
       const Rc<Presenter>&         presenter);
 
     void addPresentTelemetryItems(
@@ -333,6 +334,8 @@ namespace dxvk::hud {
       const HudGraphOptions&       options = {});
 
     ~HudPresentTelemetryData();
+
+    void setPresenter(const Rc<Presenter>& presenter);
 
     void update(
             dxvk::high_resolution_clock::time_point time);
