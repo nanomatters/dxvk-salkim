@@ -191,7 +191,7 @@ namespace dxvk {
 
     D3D9VkExtSwapchain m_swapchainExt;
 
-    bool PresentImage(UINT PresentInterval);
+    VkResult PresentImage(UINT PresentInterval);
 
     HRESULT PresentImageWithoutFlip(
             double              FrameRate,

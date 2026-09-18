@@ -5,6 +5,9 @@
 #include "d3d9_hud.h"
 #include "d3d9_window.h"
 
+#include <chrono>
+#include <thread>
+
 namespace dxvk {
 
   static uint16_t MapGammaControlPoint(float x) {
@@ -222,10 +225,17 @@ namespace dxvk {
           !!(dwFlags & D3DPRESENT_DONOTWAIT));
 
       UpdateTargetFrameRate(presentInterval);
-      bool presented = PresentImage(presentInterval);
+      VkResult status = PresentImage(presentInterval);
 
-      if (presented && flipPresentation)
+      if (status >= 0 && status != VK_NOT_READY && flipPresentation)
         m_presentationSource.activate();
+
+      // No frame was presented, so normal presentation pacing is bypassed.
+      // Match DXGI's background policy without blocking reset or device work.
+      if (status == VK_NOT_READY && !(dwFlags & D3DPRESENT_DONOTWAIT)) {
+        lock = D3D9DeviceLock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
 
       return D3D_OK;
     } catch (const DxvkError& e) {
@@ -882,7 +892,7 @@ namespace dxvk {
   }
 
 
-  bool D3D9SwapChainEx::PresentImage(UINT SyncInterval) {
+  VkResult D3D9SwapChainEx::PresentImage(UINT SyncInterval) {
     m_parent->EndFrame(m_latencyTracker);
     m_parent->Flush();
 
@@ -989,7 +999,7 @@ namespace dxvk {
       m_latencyHud->accumulateStats(latencyStats);
 
     RotateBackBuffers();
-    return status >= 0 && status != VK_NOT_READY;
+    return status;
   }
 
 

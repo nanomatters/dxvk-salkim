@@ -224,12 +224,17 @@ namespace dxvk {
     const RECT* pDestRect,
           HWND hDestWindowOverride,
     const RGNDATA* pDirtyRegion) {
-    D3D8DeviceLock lock = LockDevice();
+    {
+      D3D8DeviceLock lock = LockDevice();
 
-    if (unlikely(ShouldBatch()))
-      m_batcher->EndFrame();
+      if (unlikely(ShouldBatch()))
+        m_batcher->EndFrame();
 
-    StateChange();
+      StateChange();
+    }
+
+    // D3D9 serializes presentation itself. Do not hold the wrapper's device
+    // lock across its occlusion sleep after flushing the wrapper state.
     return GetD3D9()->Present(pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion);
   }
 
