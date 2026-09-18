@@ -85,6 +85,11 @@ namespace dxvk {
     VkPresentStageFlagsEXT completionStage = 0u;
   };
 
+  struct PresenterTelemetryFrame {
+    PresenterTelemetry data;
+    uint64_t presentTimeNs = 0u;
+  };
+
   /**
    * \brief Format compatibility list
    */
@@ -379,6 +384,9 @@ namespace dxvk {
     bool getPresentTelemetry(
             PresenterTelemetry&     telemetry);
 
+    uint32_t getPresentTelemetryFrames(uint32_t count, PresenterTelemetryFrame* frames,
+            uint64_t& nowNs, uint64_t& generation);
+
   private:
 
     Rc<DxvkDevice>              m_device;
@@ -433,6 +441,10 @@ namespace dxvk {
     dxvk::mutex                 m_presentTelemetryMutex;
     PresenterTelemetry          m_presentTelemetry;
     std::array<uint64_t, 4>     m_presentTelemetryFieldIds;
+    std::array<PresenterTelemetryFrame, 128> m_presentTelemetryFrames;
+    uint32_t                    m_presentTelemetryHead = 0u;
+    uint32_t                    m_presentTelemetryCount = 0u;
+    uint64_t                    m_presentTelemetryGeneration = 0u;
 
     VkPresentModeKHR            m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
 
