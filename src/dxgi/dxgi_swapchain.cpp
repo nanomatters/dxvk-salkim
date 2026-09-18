@@ -5,6 +5,7 @@
 
 #include "../util/util_misc.h"
 
+#include <chrono>
 #include <d3d12.h>
 
 namespace dxvk {
