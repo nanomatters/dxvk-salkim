@@ -71,8 +71,20 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `proton`: Displays the Proton build.
 - `wine`: Displays the Wine version and build.
 - `winsys`: Displays the window system, active HDR color space, and direct scanout status when available.
-- `fps`: Shows the current frame rate.
+- `fps`: Shows the frame rate averaged over each 500 ms reporting interval.
 - `fps_lows`: Shows 1% and 0.1% low frame rates over the preceding seven seconds.
+- `fps.graph`: Shows a compact FPS history graph, also available through the D3D12 HUD.
+  Uses a rolling 25 ms average, recalculated and plotted every frame.
+  The graph heading uses the same 500 ms average as the FPS counter. The plotted
+  samples remain independent of this slower numeric display.
+  Measures application frame updates, not GPU execution time, display cadence or generated
+  frames. Short per-frame fluctuations are averaged, not plotted as instantaneous FPS.
+- `graph_width=x`: Sets the graph width in HUD pixels (default `280`, range `180`–`640`).
+- `graph_height=y`: Sets the plot height (default `48`, range `24`–`160`, excluding its heading).
+- `graph_history=s`: Sets the history length in seconds (default `3`, range `1`–`30`).
+- `graph_max=n`: Fixes the vertical range to `0`–`n` in the graph's units (FPS or ms). `0` (default) uses a fine-stepped
+  automatic range, with headroom on growth and hysteresis to avoid repeated shrinking/expanding.
+  Values beyond a fixed range are clipped to its edge. The heading still shows the measurement.
 - `reflex`: Shows all available values from the newest completed Reflex latency report.
 - `reflex.id`: Shows the Reflex frame ID.
 - `reflex.interval`: Shows the interval between consecutive simulation start markers.
@@ -89,10 +101,20 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `reflex.copy`: Shows cross adapter copy time.
 - `reflex.ai`: Shows frame generation time.
 - `present_latency`: Shows all available presentation pipeline timings.
-- `latency.queue`: Shows the time from `vkQueuePresentKHR` to the end of its queue operations.
-- `latency.display`: Shows the time from queue operations ending to PresentComplete.
-- `latency.present`: Shows the time from `vkQueuePresentKHR` to PresentComplete.
-- `latency.interval`: Shows the interval between consecutive first pixel visible timestamps.
+- `latency.queue`: Shows Queue latency from our pre-present timestamp to the end of the presentation request's queue operations.
+- `latency.display`: Shows Output latency from queue operations ending to the selected presentation endpoint.
+- `latency.present`: Shows Present latency from our pre-present timestamp to the selected presentation endpoint.
+- `latency.interval`: Shows Output interval between consecutive first pixel out timestamps, when supported.
+- `latency.queue.graph`: Graphs Queue latency in ms.
+- `latency.display.graph`: Graphs Output latency in ms.
+- `latency.present.graph`: Graphs Present latency in ms.
+- `latency.interval.graph`: Graphs Output interval in ms (output cadence, not input latency).
+  These graphs use complete per-present timing reports without FPS-style averaging.
+  Missing measurements leave gaps, not zero values. Spacing between valid reports
+  is connected. A bucket containing a missing measurement stays a gap even if it
+  also contains valid samples. Numeric headings refresh every 500 ms.
+  D3D12 graphs require a vkd3d-proton build with the per-frame telemetry interface.
+  Older builds continue to support the text readings. No additional GPU waits are introduced.
 - `frametimes`: Shows a frame time graph.
 - `submissions`: Shows the number of command buffers submitted per frame.
 - `drawcalls`: Shows the number of draw calls and render passes per frame.
@@ -117,30 +139,161 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `center`: Centers text-based HUD items horizontally.
 - `bottom`: Places text-based HUD items after this token along the bottom edge.
 - `hide`: Starts the configured HUD hidden. On Wineland, press Ctrl+Shift+O
-  to show or hide it; visibility updates once per second, including while hidden.
+  to show or hide it. Visibility updates once per second, including while hidden.
   This option selects no HUD elements itself and is not implied by `full`.
 
-For example, `DXVK_HUD=devinfo,fps,newline,fps_lows,horizontal` places
-device information and FPS on the first row and low frame rates on the second.
-When text-based items occur on both sides of `bottom`, the token splits them
-between the top and bottom edges. At the beginning or end, it retains its
-original behavior and places all text-based items along the bottom edge.
-HUD elements are displayed in the order in which they are listed.
-Prefix an item with `-` to exclude it from a group or from `full`. Exclusions
-take precedence regardless of token order. For example,
-`DXVK_HUD=gpu,-gpu.name` displays all GPU telemetry except the device name.
-For example, `DXVK_HUD=fps,gpu,hide` starts with FPS and GPU telemetry hidden;
-`-hide` overrides `hide` regardless of token order.
-Junction temperature uses a GPU hwmon sensor labelled `junction`, such as
-AMD's hotspot sensor. The row is hidden when no valid reading is available;
-the ordinary GPU temperature is not substituted. Like other GPU telemetry,
-it updates once per second, including while the HUD or row is hidden.
-Reflex marker timestamps are displayed relative to the simulation start marker.
-Presentation pipeline timings require `VK_EXT_present_timing`. PresentComplete
-uses first pixel visible when available, then first pixel out or request dequeued.
-The displayed frame interval is reported only when first pixel visible is available.
+#### Layout
 
-Additionally, `DXVK_HUD=1` has the same effect as `DXVK_HUD=devinfo,fps`, and `DXVK_HUD=full` enables all available HUD elements.
+Items appear in the order listed. Use `horizontal` for rows and `newline` to
+start another row.
+
+This puts device information and FPS on the first row, with low frame rates below:
+
+```sh
+DXVK_HUD=devinfo,fps,newline,fps_lows,horizontal
+```
+
+Use `bottom` between items to split the HUD between the top and bottom edges.
+Items before it stay at the top. Items after it go to the bottom.
+If `bottom` is the first or last item, the whole text layout goes to the bottom.
+
+#### Graphs
+
+Graphs use the same placement, scaling, opacity and background settings as text.
+Graph options alone do not enable a graph.
+
+A compact FPS graph with a fixed 144 FPS scale:
+
+```sh
+DXVK_HUD=fps.graph,graph_width=240,graph_height=40,graph_max=144
+```
+
+An FPS counter with its graph below:
+
+```sh
+DXVK_HUD=fps,newline,fps.graph,horizontal
+```
+
+All four presentation latency graphs:
+
+```sh
+DXVK_HUD=latency.queue.graph,latency.display.graph,latency.present.graph,latency.interval.graph
+```
+
+Timing availability depends on the driver and compositor. See
+[Presentation latency measurements](#presentation-latency-measurements) for
+the timestamp sources, formulas and limitations.
+
+#### Selecting and hiding items
+
+- `DXVK_HUD=1` is shorthand for `DXVK_HUD=devinfo,fps`.
+- `DXVK_HUD=full` enables all available HUD elements, including graphs.
+- Prefix an item with `-` to exclude it from a group or from `full`.
+  Exclusions win regardless of their position in the configuration.
+
+Show GPU telemetry without the device name:
+
+```sh
+DXVK_HUD=gpu,-gpu.name
+```
+
+Start with FPS and GPU telemetry hidden:
+
+```sh
+DXVK_HUD=fps,gpu,hide
+```
+
+On Wineland, press **Ctrl+Shift+O** to show or hide the HUD.
+`-hide` overrides `hide` regardless of token order.
+
+#### Telemetry notes and rendering limits
+
+- **Junction temperature** uses a hwmon sensor labelled `junction`, such as
+  AMD's hotspot sensor. The row is hidden when no valid reading is available.
+  The ordinary GPU temperature is not substituted.
+- **GPU telemetry** updates once per second, even when its row or the HUD is hidden.
+- **Reflex markers** are relative to the simulation start timestamp.
+- **D3D12 HUD capacity** is 16,384 vertices, falling back to 8,192 with older
+  presenters. Extremely large layouts can be truncated at this limit.
+
+#### Presentation latency measurements
+
+These readings require `VK_EXT_present_timing` and support from the driver and
+presentation stack. DXVK and vkd3d-proton use the same measurement boundaries.
+Durations are stored in nanoseconds and displayed in milliseconds.
+
+- `T0` is our host timestamp shortly before calling `vkQueuePresentKHR`.
+  It is not the start of the game's frame or its DXGI `Present()` call.
+  In vkd3d-proton it is recorded on the command queue's submission thread.
+  Any queueing between the application's `Present()` call and this point is excluded.
+- `T1` is the Vulkan driver's `QUEUE_OPERATIONS_END` timestamp.
+  It marks completion of that presentation request's queue operations, including
+  its semaphore waits and any implicitly queued implementation work.
+- `T2` is the Vulkan driver's `FIRST_PIXEL_OUT` timestamp when supported.
+  It marks the first pixel's data leaving the presentation engine toward display
+  hardware. It does not mean that the pixel is already visible or that the whole
+  frame has been scanned out.
+
+We retrieve `T1` and `T2` through `vkGetPastPresentationTimingEXT`. The driver
+supplies the timestamps of the events, not the time at which we read the report.
+Receiving a report several frames later does not add to the measured latency.
+Different clock domains are calibrated into a common host-clock representation
+before subtraction. We do not timestamp KMS fence notifications ourselves.
+
+Vulkan is the reporting interface, not necessarily the original measurement
+source. [Mesa 26.2.2's Wayland WSI](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-26.2.2/src/vulkan/wsi/wsi_common_wayland.c)
+uses the compositor's `wp_presentation_feedback.presented` timestamp for first
+pixel out. On KWin's DRM backend this normally comes from the kernel page-flip
+completion timestamp. It describes the output frame containing the game's image,
+which can be a composited frame or the game buffer in direct scanout.
+It is not a measurement of panel response. KWin can use a software timestamp
+when the kernel timestamp is missing or during a modeset, so hardware timing is
+not guaranteed for every report. Other drivers can use different timing sources.
+
+```text
+T0                         T1                         T2
+Before Vulkan present      Queue operations end       First pixel out
+|                          |                          |
+|------ Queue latency -----|----- Output latency -----|
+|------------------- Present latency -----------------|
+```
+
+| HUD label | Calculation | Configuration keyword |
+| --- | --- | --- |
+| Queue latency | `T1 - T0` | `latency.queue` |
+| Output latency | `T2 - T1` | `latency.display` |
+| Present latency | `T2 - T0` | `latency.present` |
+| Output interval | `T2(current frame) - T2(previous frame)` | `latency.interval` |
+
+Queue latency includes submission work after `T0`, dependency waits, and queued
+presentation work. Rendering may already be underway at `T0`, so its remaining
+wait can contribute. This is not the complete GPU rendering time or merely the
+CPU duration of `vkQueuePresentKHR`. Output latency can include compositor
+scheduling, composition, and waiting for display output. The boundary does not
+isolate GPU work from compositor work. Neither measurement is full input-to-screen latency.
+
+If first pixel out is unavailable, `T2` falls back to `FIRST_PIXEL_VISIBLE`, then
+`REQUEST_DEQUEUED`. The former includes display processing up to first-pixel
+visibility. The latter only measures up to removal from the swapchain's internal
+presentation queue and does not establish that the image reached the display.
+Output interval is shown only for consecutive presents with valid, increasing
+first pixel out timestamps. Missing measurements are unavailable, not zero.
+
+Wine disables presentation-timing capabilities for surfaces eligible for its
+managed dmabuf presentation path, including cross-process surfaces. Managed
+swapchains return no timing reports. These surfaces can therefore show `--`
+even when the host driver supports the extension. This is a Wine presentation-path
+limitation, not a calibration failure or missing driver support.
+
+Output interval measures cadence, not the time spent in the pipeline. Frames
+submitted at 0, 8, and 16 ms and output at 20, 28, and 36 ms each have 20 ms
+Present latency but only 8 ms Output interval. Several frames can be in flight.
+
+For the same frame, Present latency equals Queue latency plus Output latency.
+Text readings refresh every 500 ms using each field's latest valid sample, not
+a 500 ms average. Fields can therefore refer to different frames and may not
+add up exactly on screen. The graphs use individual per-present reports.
+Three decimal places in the text are formatting, not a guarantee of microsecond accuracy.
 
 ### Logs
 When used with Wine, DXVK will print log messages to `stderr`. Additionally, standalone log files can optionally be generated by setting the `DXVK_LOG_PATH` variable, where log files in the given directory will be called `app_d3d11.log`, `app_dxgi.log` etc., where `app` is the name of the game executable.

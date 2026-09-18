@@ -659,6 +659,8 @@ namespace dxvk {
       m_previousPresentCompleteNs = 0u;
       m_presentTelemetry = { };
       m_presentTelemetryFieldIds = { };
+      m_presentTelemetryHead = m_presentTelemetryCount = 0u;
+      m_presentTelemetryGeneration++;
     }
   }
 
@@ -668,6 +670,20 @@ namespace dxvk {
     std::lock_guard lock(m_presentTelemetryMutex);
     telemetry = m_presentTelemetry;
     return telemetry.validFields != 0u;
+  }
+
+
+  uint32_t Presenter::getPresentTelemetryFrames(uint32_t count,
+          PresenterTelemetryFrame* frames, uint64_t& nowNs, uint64_t& generation) {
+    std::lock_guard lock(m_presentTelemetryMutex);
+    count = std::min(count, m_presentTelemetryCount);
+    for (uint32_t i = 0; i < count; i++)
+      frames[i] = m_presentTelemetryFrames[(m_presentTelemetryHead + i) % m_presentTelemetryFrames.size()];
+    m_presentTelemetryHead = (m_presentTelemetryHead + count) % m_presentTelemetryFrames.size();
+    m_presentTelemetryCount -= count;
+    generation = m_presentTelemetryGeneration;
+    nowNs = presentTelemetryNowNs();
+    return count;
   }
 
 
@@ -837,10 +853,11 @@ namespace dxvk {
       && (presentTimingCaps.presentStageQueries & VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT)
       && (presentTimingCaps.presentStageQueries & completionStages);
 
-    if (presentTimingCaps.presentStageQueries & VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT)
-      m_presentTelemetryStage = VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT;
-    else if (presentTimingCaps.presentStageQueries & VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT)
+    // Prefer output timing, excluding the display's internal processing delay.
+    if (presentTimingCaps.presentStageQueries & VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT)
       m_presentTelemetryStage = VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT;
+    else if (presentTimingCaps.presentStageQueries & VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT)
+      m_presentTelemetryStage = VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT;
     else if (presentTimingCaps.presentStageQueries & VK_PRESENT_STAGE_REQUEST_DEQUEUED_BIT_EXT)
       m_presentTelemetryStage = VK_PRESENT_STAGE_REQUEST_DEQUEUED_BIT_EXT;
     else
@@ -2111,16 +2128,15 @@ namespace dxvk {
         completeTime = timing.pPresentStages[j].time;
     }
 
-    if (!queueTime && !completeTime)
-      return;
-
     uint64_t queueTimeNs = 0u;
     uint64_t completeTimeNs = 0u;
 
-    if (!calibratePresentTelemetry(timing.timeDomain,
+    if ((queueTime || completeTime) && !calibratePresentTelemetry(timing.timeDomain,
         timing.timeDomainId, queueTime, completeTime,
-        &queueTimeNs, &completeTimeNs))
-      return;
+        &queueTimeNs, &completeTimeNs)) {
+      // Preserve a missing-data report for the graphs, not a stale value.
+      queueTimeNs = completeTimeNs = 0u;
+    }
 
     PresenterTelemetry telemetry = { };
     telemetry.presentId = timing.presentId;
@@ -2146,8 +2162,8 @@ namespace dxvk {
       telemetry.displayDurationNs = completeTimeNs - queueTimeNs;
     }
 
-    // This measured visible-to-visible interval naturally reflects VRR cadence.
-    if (m_presentTelemetryStage == VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_VISIBLE_BIT_EXT &&
+    // Measure output cadence, not queue removal or the display's response time.
+    if (m_presentTelemetryStage == VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT &&
         completeTimeNs && timing.presentId > m_previousPresentCompleteId) {
       if (timing.presentId == m_previousPresentCompleteId + 1u &&
           m_previousPresentCompleteNs && completeTimeNs > m_previousPresentCompleteNs) {
@@ -2158,6 +2174,15 @@ namespace dxvk {
       m_previousPresentCompleteId = timing.presentId;
       m_previousPresentCompleteNs = completeTimeNs;
     }
+
+    // Keep complete, per-present reports separately from the text snapshot.
+    // Overflow drops the oldest report. It must never delay presentation.
+    if (m_presentTelemetryCount == m_presentTelemetryFrames.size()) {
+      m_presentTelemetryHead = (m_presentTelemetryHead + 1u) % m_presentTelemetryFrames.size();
+      m_presentTelemetryCount--;
+    }
+    m_presentTelemetryFrames[(m_presentTelemetryHead + m_presentTelemetryCount++)
+      % m_presentTelemetryFrames.size()] = { telemetry, present.timeNs };
 
     auto updateField = [&] (uint32_t index, uint32_t valid,
                             uint64_t value, uint64_t PresenterTelemetry::*member) {
@@ -2247,6 +2272,8 @@ namespace dxvk {
       m_previousPresentCompleteNs = 0u;
       m_presentTelemetry = { };
       m_presentTelemetryFieldIds = { };
+      m_presentTelemetryHead = m_presentTelemetryCount = 0u;
+      m_presentTelemetryGeneration++;
     }
   }
 

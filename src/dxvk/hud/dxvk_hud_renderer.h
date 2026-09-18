@@ -8,6 +8,8 @@
 
 namespace dxvk::hud {
 
+  class HudGraph;
+
   constexpr uint32_t HudFontSize = 20;
   constexpr uint32_t HudSmallFontSize = 14;
   constexpr int32_t HudLineHeight = HudFontSize + 4;
@@ -96,6 +98,8 @@ namespace dxvk::hud {
   public:
 
     virtual ~HudRenderer() { }
+
+    virtual void drawGraph(HudPos position, const HudGraph& graph);
 
     uint32_t textWidth(
             uint32_t            size,
