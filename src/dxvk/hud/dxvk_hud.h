@@ -24,6 +24,9 @@ namespace dxvk::hud {
     
     ~Hud();
 
+    // Bind on the rendering thread before updating the HUD.
+    void setPresenter(const Rc<Presenter>& presenter);
+
     /**
      * \brief Update HUD
      * 
@@ -89,6 +92,7 @@ namespace dxvk::hud {
     HudVulkanRenderer     m_renderer;
     HudItemSet            m_hudItems;
     Rc<HudSystemInfoItem> m_systemInfo;
+    Rc<HudPresentTelemetryData> m_presentTelemetry;
     dxvk::high_resolution_clock::time_point m_nextPresentationUpdate;
     bool                  m_toggleEnabled;
     bool                  m_hidden = false;

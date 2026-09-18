@@ -756,12 +756,9 @@ namespace dxvk::hud {
 
 
   template<typename T>
-  static void addPresentTelemetrySource(
+  static Rc<HudPresentTelemetryData> addPresentTelemetrySource(
           HudItemSet&             items,
           T*                      presenter) {
-    if (!presenter)
-      return;
-
     bool group = items.isEnabled("present_latency");
     uint64_t metricMask = getEnabledMetricMask(
       items, "present_latency", HudPresentTelemetryMetrics);
@@ -773,7 +770,7 @@ namespace dxvk::hud {
     }
 
     if (!metricMask && !graphMask)
-      return;
+      return nullptr;
 
     Rc<HudPresentTelemetryData> data = new HudPresentTelemetryData(presenter, graphMask, items.graphOptions());
 
@@ -790,18 +787,21 @@ namespace dxvk::hud {
         items.add<HudPresentTelemetryGraphItem>(HudPresentTelemetryMetrics[i].graphOption, -1,
           data, HudPresentTelemetryMetric(i));
     }
+
+    return data;
   }
 
 
-  void HudItemSet::addPresentTelemetryItems(
+  Rc<HudPresentTelemetryData> HudItemSet::addPresentTelemetryItems(
     const Rc<Presenter>& presenter) {
-    addPresentTelemetrySource(*this, presenter.ptr());
+    return addPresentTelemetrySource(*this, presenter.ptr());
   }
 
 
   void HudItemSet::addPresentTelemetryItems(
           IDXGIVkSwapChainPresentTelemetry* presenter) {
-    addPresentTelemetrySource(*this, presenter);
+    if (presenter)
+      addPresentTelemetrySource(*this, presenter);
   }
 
 
@@ -957,11 +957,10 @@ namespace dxvk::hud {
 
 
   HudPresentTelemetryData::HudPresentTelemetryData(
-          Presenter* presenter, uint32_t graphMask, const HudGraphOptions& options)
-  : m_presenter(presenter) {
-    m_presenter->setPresentTelemetryEnabled(true);
+          Presenter* presenter, uint32_t graphMask, const HudGraphOptions& options) {
     m_values.fill("--");
     initGraphs(graphMask, options);
+    setPresenter(presenter);
   }
 
 
@@ -987,6 +986,29 @@ namespace dxvk::hud {
     if (m_dxgiPresenter) {
       m_dxgiPresenter->SetEnabled(FALSE);
       m_dxgiPresenter->Release();
+    }
+  }
+
+
+  void HudPresentTelemetryData::setPresenter(const Rc<Presenter>& presenter) {
+    if (m_presenter == presenter)
+      return;
+
+    if (m_presenter)
+      m_presenter->setPresentTelemetryEnabled(false);
+    m_presenter = presenter;
+    if (m_presenter)
+      m_presenter->setPresentTelemetryEnabled(true);
+
+    // Present IDs and history generations belong to each presenter.
+    m_values.fill("--");
+    m_lastUpdate = { };
+    m_lastGraphUpdate = { };
+    m_generation = 0;
+    m_completionStage = 0;
+    m_stageTimeNs = 0;
+    for (auto& graph : m_graphs) {
+      if (graph) graph->clear();
     }
   }
 
@@ -1023,7 +1045,7 @@ namespace dxvk::hud {
       data.PresentDurationNs = telemetry.presentDurationNs;
       data.DisplayIntervalNs = telemetry.displayIntervalNs;
       data.CompletionStage = telemetry.completionStage;
-    } else if (FAILED(m_dxgiPresenter->GetData(&data))) {
+    } else if (!m_dxgiPresenter || FAILED(m_dxgiPresenter->GetData(&data))) {
       return;
     }
 
