@@ -411,7 +411,19 @@ namespace dxvk {
   HRESULT D3D11SwapChain::PresentImage(
             UINT                      SyncInterval,
       const DXGI_PRESENT_PARAMETERS*  pPresentParameters) {
-    // Flush pending rendering commands before
+    // Validate before acquiring an image. An invalid present must not leave
+    // the presenter waiting for a submission that will never be queued.
+    bool incrementalPresent = UseIncrementalPresent(pPresentParameters);
+
+    bool sequential = m_desc.SwapEffect == DXGI_SWAP_EFFECT_SEQUENTIAL ||
+                      m_desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+
+    if (incrementalPresent && !sequential) {
+      Logger::err("D3D11: Incremental present only supported with sequential present modes.");
+      return DXGI_ERROR_INVALID_CALL;
+    }
+
+    // Flush pending rendering commands before acquiring an image.
     auto immediateContext = m_parent->GetContext();
     auto immediateContextLock = immediateContext->LockContext();
 
@@ -442,18 +454,6 @@ namespace dxvk {
 
     VkRect2D srcRect = ComputeSrcPresentRect();
     VkRect2D dstRect = ComputeDstPresentRect(dstSize, srcRect.extent);
-
-    // Incremental presentation is only supported with flip model presentation
-    // on native, not 100% sure about the exact validation here.
-    bool incrementalPresent = UseIncrementalPresent(pPresentParameters);
-
-    bool sequential = m_desc.SwapEffect == DXGI_SWAP_EFFECT_SEQUENTIAL ||
-                      m_desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
-
-    if (incrementalPresent && !sequential) {
-      Logger::err("D3D11: Incremental present only supported with sequential present modes.");
-      return DXGI_ERROR_INVALID_CALL;
-    }
 
     DirtyRectList dirtyRects;
 
