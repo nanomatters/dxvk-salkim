@@ -53,7 +53,9 @@ vec2 unpack_u16(uint v) {
 }
 
 void main() {
-  draw_info_t draw_info = draw_infos[gl_DrawID];
+  // Rectangle runs use instances. Ordinary and GPU-generated text draws keep
+  // firstInstance zero unless preceded by a batched run.
+  draw_info_t draw_info = draw_infos[gl_DrawID + gl_InstanceIndex];
   o_color = unpackUnorm4x8(draw_info.color);
 
   // Compute character index and vertex index for the current
