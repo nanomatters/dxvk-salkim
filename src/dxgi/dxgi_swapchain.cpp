@@ -5,7 +5,9 @@
 
 #include "../util/util_misc.h"
 
+#include <chrono>
 #include <d3d12.h>
+#include <thread>
 
 namespace dxvk {
   
@@ -373,6 +375,25 @@ namespace dxvk {
   }
 
   HRESULT STDMETHODCALLTYPE DxgiSwapChain::PresentBase(
+          UINT                      SyncInterval,
+          UINT                      PresentFlags,
+    const DXGI_PRESENT_PARAMETERS*  pPresentParameters) {
+    HRESULT hr = PresentImage(SyncInterval, PresentFlags, pPresentParameters);
+
+    // Presenters may return OCCLUDED without their normal frame pacing.
+    // Limit ignored occlusion to about 10 blocking presents/s while hidden or
+    // the display is off. Render-loop-driven simulation is slowed down too.
+    // Sleep outside the swapchain locks so resize and restore can proceed.
+    // Test and explicitly nonblocking presents must not wait.
+    if (hr == DXGI_STATUS_OCCLUDED &&
+        !(PresentFlags & (DXGI_PRESENT_TEST | DXGI_PRESENT_DO_NOT_WAIT)))
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    return hr;
+  }
+
+
+  HRESULT DxgiSwapChain::PresentImage(
           UINT                      SyncInterval,
           UINT                      PresentFlags,
     const DXGI_PRESENT_PARAMETERS*  pPresentParameters) {

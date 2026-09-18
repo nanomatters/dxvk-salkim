@@ -276,6 +276,11 @@ namespace dxvk {
             UINT                      SyncInterval,
             UINT                      PresentFlags,
       const DXGI_PRESENT_PARAMETERS*  pPresentParameters);
+
+    HRESULT PresentImage(
+            UINT                      SyncInterval,
+            UINT                      PresentFlags,
+      const DXGI_PRESENT_PARAMETERS*  pPresentParameters);
   };
   
 }
