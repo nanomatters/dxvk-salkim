@@ -212,6 +212,7 @@ namespace dxvk {
     double                          m_frameRateRefresh = 0.0;
     double                          m_frameRateLimit = 0.0;
     uint32_t                        m_frameRateSyncInterval = 0u;
+    dxvk::high_resolution_clock::time_point m_frameRateLastUpdate = { };
     bool                            m_is_d3d12;
 
     std::unique_ptr<DxgiHud>        m_hud;
