@@ -953,6 +953,10 @@ namespace dxvk {
           ctx->ensureImageCompatibility(cSrcView->image(), usage);
         }
 
+        // Follow destination-window changes on the same thread as HUD updates.
+        if (cHud)
+          cHud->setPresenter(cPresenter);
+
         // Blit back buffer onto Vulkan swap chain
         auto contextObjects = ctx->beginExternalRendering();
 
