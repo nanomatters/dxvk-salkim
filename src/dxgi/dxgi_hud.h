@@ -31,7 +31,8 @@ namespace dxvk {
 
   private:
 
-    constexpr static size_t MaxVertices = 8192;
+    constexpr static size_t MaxVertices = 16384;
+    constexpr static size_t LegacyMaxVertices = 8192;
 
     explicit DxgiHud(
             std::string             config,
@@ -44,6 +45,7 @@ namespace dxvk {
     hud::HudItemSet                  m_hudItems;
     Rc<hud::HudSystemInfoItem>       m_systemInfo;
     std::vector<DXGI_VK_HUD_VERTEX> m_vertices;
+    size_t                           m_vertexLimit = MaxVertices;
     dxvk::high_resolution_clock::time_point m_nextPresentationUpdate;
     bool                             m_toggleEnabled;
     bool                             m_hidden = false;

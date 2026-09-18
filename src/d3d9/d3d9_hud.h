@@ -15,7 +15,6 @@ namespace dxvk::hud {
     HudTextureMemory(D3D9DeviceEx* device);
 
     void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
@@ -52,7 +51,6 @@ namespace dxvk::hud {
     HudSWVPState(D3D9DeviceEx* device);
 
     void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(

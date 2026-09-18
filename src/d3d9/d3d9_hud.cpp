@@ -9,7 +9,6 @@ namespace dxvk::hud {
 
 
   void HudTextureMemory::update(
-          Presenter&                              presenter,
           dxvk::high_resolution_clock::time_point time) {
     auto stats = m_device->GetAllocator()->getStats();
 
@@ -57,7 +56,6 @@ namespace dxvk::hud {
 
 
   void HudSWVPState::update(
-          Presenter&                              presenter,
           dxvk::high_resolution_clock::time_point time) {
     m_swvpShaderCount = str::format(m_device->GetSWVPShaderCount());
 

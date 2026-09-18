@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -12,9 +13,11 @@
 #include "../dxvk_presenter.h"
 
 #include "dxvk_hud_renderer.h"
+#include "dxvk_hud_graph.h"
 
 struct ID3DLowLatencyDevice;
 struct IDXGIVkSwapChainPresentTelemetry;
+struct IDXGIVkSwapChainPresentTelemetry1;
 
 namespace dxvk {
   class Presenter;
@@ -23,6 +26,7 @@ namespace dxvk {
 namespace dxvk::hud {
 
   class HudSystemInfoItem;
+  class HudFpsData;
 
   /**
    * \brief HUD item
@@ -41,7 +45,6 @@ namespace dxvk::hud {
      * \param [in] time Current time
      */
     virtual void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     virtual bool supportsHorizontalLayout() const {
@@ -86,7 +89,7 @@ namespace dxvk::hud {
      * \brief Updates the HUD
      * Updates all enabled HUD items.
      */
-    void update(Presenter&     presenter);
+    void update(Presenter* presenter = nullptr);
 
     /**
      * \brief Renders the HUD
@@ -116,6 +119,10 @@ namespace dxvk::hud {
     }
 
     Rc<HudSystemInfoItem> addSystemInfoItems();
+
+    void addFpsItems();
+
+    HudGraphOptions graphOptions();
 
     void addGpuTelemetryItems(
       const Rc<DxvkAdapter>&         adapter);
@@ -208,6 +215,7 @@ namespace dxvk::hud {
     std::vector<size_t>                           m_itemLines;
     std::vector<bool>                             m_itemBottom;
     HudOptions                                    m_renderOptions;
+    Rc<HudFpsData>                                m_fpsData;
     int64_t                                       m_fpsLowsWindowNs = 7'000'000'000;
     bool                                          m_hasNewline = false;
     bool                                          m_splitBottom = false;
@@ -316,10 +324,14 @@ namespace dxvk::hud {
   public:
 
     HudPresentTelemetryData(
-            Presenter*             presenter);
+            Presenter*             presenter,
+            uint32_t               graphMask = 0,
+      const HudGraphOptions&       options = {});
 
     HudPresentTelemetryData(
-            IDXGIVkSwapChainPresentTelemetry* presenter);
+            IDXGIVkSwapChainPresentTelemetry* presenter,
+            uint32_t               graphMask = 0,
+      const HudGraphOptions&       options = {});
 
     ~HudPresentTelemetryData();
 
@@ -329,15 +341,29 @@ namespace dxvk::hud {
     const std::string& value(
             HudPresentTelemetryMetric metric) const;
 
+    const HudGraph& graph(HudPresentTelemetryMetric metric) const;
+
   private:
 
     Rc<Presenter>                   m_presenter;
     IDXGIVkSwapChainPresentTelemetry* m_dxgiPresenter = nullptr;
+    IDXGIVkSwapChainPresentTelemetry1* m_dxgiHistory = nullptr;
+
+    std::array<std::unique_ptr<HudGraph>,
+      size_t(HudPresentTelemetryMetric::Count)> m_graphs;
+    bool m_hasGraphs = false;
+    uint64_t m_generation = 0;
+    uint32_t m_completionStage = 0;
+    uint64_t m_stageTimeNs = 0;
+    dxvk::high_resolution_clock::time_point m_lastGraphUpdate;
 
     std::array<std::string,
       size_t(HudPresentTelemetryMetric::Count)> m_values;
 
     dxvk::high_resolution_clock::time_point m_lastUpdate;
+
+    void initGraphs(uint32_t mask, HudGraphOptions options);
+    void updateGraphs(dxvk::high_resolution_clock::time_point time);
 
   };
 
@@ -370,6 +396,21 @@ namespace dxvk::hud {
     HudPresentTelemetryMetric   m_metric;
     uint64_t                    m_metricMask;
 
+  };
+
+
+  class HudPresentTelemetryGraphItem : public HudItem {
+  public:
+    HudPresentTelemetryGraphItem(const Rc<HudPresentTelemetryData>& data,
+      HudPresentTelemetryMetric metric);
+
+    void update(dxvk::high_resolution_clock::time_point time) override;
+    HudPos render(const Rc<DxvkCommandList>& ctx, const HudPipelineKey& key,
+      const HudOptions& options, HudRenderer& renderer, HudPos position) override;
+
+  private:
+    Rc<HudPresentTelemetryData> m_data;
+    HudPresentTelemetryMetric m_metric;
   };
 
 
@@ -665,19 +706,41 @@ namespace dxvk::hud {
 
 
   /**
+   * \brief FPS counter and rolling graph sampler, updated once per HUD frame
+   */
+  class HudFpsData : public RcObject {
+  public:
+    void update(dxvk::high_resolution_clock::time_point time, uint64_t frameId = 0);
+
+    float value() const { return m_value; }
+    const std::string& text() const { return m_text; }
+    int64_t sampleTimeNs() const { return m_sampleTimeNs; }
+
+  private:
+    static constexpr int64_t WindowDurationNs = 25'000'000;
+    static constexpr int64_t TextUpdateIntervalNs = 500'000'000;
+    static constexpr size_t MaxSamples = 1024;
+    std::array<int64_t, MaxSamples> m_frameTimes = {};
+    std::array<uint64_t, MaxSamples> m_frameIds = {};
+    uint64_t m_lastFrameId = 0;
+    size_t m_sampleHead = 0;
+    size_t m_sampleCount = 0;
+    int64_t m_firstFrameTimeNs = -1;
+    int64_t m_lastFrameTimeNs = -1;
+    int64_t m_sampleTimeNs = -1;
+    int64_t m_lastTextUpdateNs = -1;
+    uint64_t m_textFrameCount = 0;
+    float m_value = 0.0f;
+    std::string m_text = "--";
+  };
+
+
+  /**
    * \brief HUD item to display the frame rate
    */
   class HudFpsItem : public HudItem {
-    constexpr static int64_t UpdateInterval = 500'000;
   public:
-
-    HudFpsItem();
-
-    ~HudFpsItem();
-
-    void update(
-            Presenter&                              presenter,
-            dxvk::high_resolution_clock::time_point time);
+    explicit HudFpsItem(const Rc<HudFpsData>& data);
 
     HudPos render(
       const Rc<DxvkCommandList>&ctx,
@@ -688,18 +751,32 @@ namespace dxvk::hud {
 
   private:
 
-    PresenterTimingFeedback                 m_lastFeedback = {};
-
-    dxvk::high_resolution_clock::time_point m_lastUpdate
-      = dxvk::high_resolution_clock::now();
-
-    std::string m_frameRate;
+    Rc<HudFpsData> m_data;
 
   };
 
 
   /**
    * \brief HUD item to display the frame rate
+   */
+  class HudFpsGraphItem : public HudItem {
+  public:
+    HudFpsGraphItem(const Rc<HudFpsData>& data, const HudGraphOptions& options);
+
+    void update(dxvk::high_resolution_clock::time_point time) override;
+
+    HudPos render(const Rc<DxvkCommandList>& ctx, const HudPipelineKey& key,
+      const HudOptions& options, HudRenderer& renderer, HudPos position) override;
+
+  private:
+    Rc<HudFpsData> m_data;
+    HudGraph m_graph;
+    int64_t m_sampleTimeNs = -1;
+  };
+
+
+  /**
+   * \brief GPU timestamp interval graph
    */
   class HudFrameTimeItem : public HudItem {
     constexpr static size_t NumDataPoints = 420u;
@@ -820,7 +897,6 @@ namespace dxvk::hud {
     ~HudSubmissionStatsItem();
 
     void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
@@ -863,7 +939,6 @@ namespace dxvk::hud {
     ~HudDrawCallStatsItem();
 
     void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
@@ -903,7 +978,6 @@ namespace dxvk::hud {
     ~HudPipelineStatsItem();
 
     void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
@@ -936,7 +1010,6 @@ namespace dxvk::hud {
     ~HudDescriptorStatsItem();
 
     void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
@@ -981,7 +1054,6 @@ namespace dxvk::hud {
     ~HudMemoryStatsItem();
 
     void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
@@ -1018,7 +1090,6 @@ namespace dxvk::hud {
     }
 
     void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
@@ -1104,7 +1175,6 @@ namespace dxvk::hud {
     ~HudCsThreadItem();
 
     void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
@@ -1152,7 +1222,6 @@ namespace dxvk::hud {
     ~HudGpuLoadItem();
 
     void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
@@ -1193,7 +1262,6 @@ namespace dxvk::hud {
     }
 
     void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
@@ -1230,7 +1298,6 @@ namespace dxvk::hud {
     ~HudLatencyItem();
 
     void update(
-            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
