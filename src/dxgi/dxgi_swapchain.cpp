@@ -414,10 +414,11 @@ namespace dxvk {
 
     UpdateGlobalHDRState();
 
+    std::lock_guard<dxvk::recursive_mutex> lockWin(m_lockWindow);
+
     if (!(PresentFlags & DXGI_PRESENT_TEST))
       UpdateTargetFrameRate(SyncInterval);
 
-    std::lock_guard<dxvk::recursive_mutex> lockWin(m_lockWindow);
     HRESULT hr = S_OK;
 
     if (wsi::isWindow(m_window) || !m_window) {
@@ -1174,25 +1175,40 @@ namespace dxvk {
 
     // Engage the frame limiter with large sync intervals even in windowed
     // mode since we want to avoid double-presenting to the swap chain.
-    if (SyncInterval != m_frameRateSyncInterval && m_descFs.Windowed) {
-      bool engageLimiter = (SyncInterval > 1u) || (SyncInterval && m_hasLatencyControl);
+    if (m_descFs.Windowed) {
+      bool engageLimiter = m_frameRateOption == 0.0 &&
+        ((SyncInterval > 1u) || (SyncInterval && m_hasLatencyControl));
 
-      m_frameRateSyncInterval = SyncInterval;
-      m_frameRateRefresh = 0.0f;
+      auto now = engageLimiter ? dxvk::high_resolution_clock::now()
+                               : dxvk::high_resolution_clock::time_point();
 
-      if (engageLimiter && wsi::isWindow(m_window)) {
-        wsi::WsiMode mode = { };
+      // Refresh the cached mode to account for monitor moves and desktop
+      // mode changes even when the application's sync interval is unchanged.
+      // Avoid querying display settings every frame or for explicit limits.
+      bool refreshMode = engageLimiter &&
+        (m_frameRateLastUpdate == dxvk::high_resolution_clock::time_point() ||
+         now - m_frameRateLastUpdate >= std::chrono::seconds(1));
 
-        if (wsi::getCurrentDisplayMode(wsi::getWindowMonitor(m_window), &mode)) {
-          if (mode.refreshRate.numerator && mode.refreshRate.denominator) {
-            m_frameRateRefresh = double(mode.refreshRate.numerator)
-                               / double(mode.refreshRate.denominator);
+      if (SyncInterval != m_frameRateSyncInterval || refreshMode) {
+        m_frameRateSyncInterval = SyncInterval;
+        m_frameRateLastUpdate = now;
+        m_frameRateRefresh = 0.0;
+
+        if (engageLimiter && wsi::isWindow(m_window)) {
+          wsi::WsiMode mode = { };
+
+          if (wsi::getCurrentDisplayMode(wsi::getWindowMonitor(m_window), &mode)) {
+            if (mode.refreshRate.numerator && mode.refreshRate.denominator) {
+              m_frameRateRefresh = double(mode.refreshRate.numerator)
+                                 / double(mode.refreshRate.denominator);
+            }
           }
         }
       }
-    } else if (!m_descFs.Windowed) {
+    } else {
       // Reset tracking when in fullscreen mode
       m_frameRateSyncInterval = 0;
+      m_frameRateLastUpdate = { };
     }
 
     // Use a negative number to indicate that the limiter should only
