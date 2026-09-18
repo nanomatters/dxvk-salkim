@@ -32,12 +32,18 @@ namespace dxvk::hud {
       addItem<HudGpuLoadItem>("gpuload", -1, device);
     addItem<HudCompilerActivityItem>("compiler", -1, device);
     m_hudItems.addReflexItems(lowLatencyDevice);
-    m_hudItems.addPresentTelemetryItems(presenter);
+    m_presentTelemetry = m_hudItems.addPresentTelemetryItems(presenter);
   }
 
 
   Hud::~Hud() {
     
+  }
+
+
+  void Hud::setPresenter(const Rc<Presenter>& presenter) {
+    if (m_presentTelemetry)
+      m_presentTelemetry->setPresenter(presenter);
   }
 
 

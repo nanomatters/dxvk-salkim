@@ -219,7 +219,8 @@ On Wineland, press **Ctrl+Shift+O** to show or hide the HUD.
 #### Presentation latency measurements
 
 These readings require `VK_EXT_present_timing` and support from the driver and
-presentation stack. DXVK and vkd3d-proton use the same measurement boundaries.
+presentation stack. They are available for D3D8, D3D9, D3D10 and D3D11 through
+DXVK, and for D3D12 through vkd3d-proton. Both use the same measurement boundaries.
 Durations are stored in nanoseconds and displayed in milliseconds.
 
 - `T0` is our host timestamp shortly before calling `vkQueuePresentKHR`.
