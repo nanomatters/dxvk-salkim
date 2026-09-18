@@ -183,6 +183,7 @@ namespace dxvk {
     bool                      m_latencyTracking = false;
     Rc<DxvkLatencyTracker>    m_latencyTracker = nullptr;
 
+    Rc<hud::Hud>             m_hud;
     Rc<hud::HudClientApiItem> m_apiHud;
     Rc<hud::HudLatencyItem>   m_latencyHud;
 
