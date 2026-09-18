@@ -451,8 +451,8 @@ namespace dxvk {
     if (!m_signal || !frameId)
       return;
 
-    // Once a flip-model present has made this BLT update non-visible, waiting
-    // for an older WSI presentation would preserve an ordering Windows ignores.
+    // Discarded frames have no WSI completion to wait for. The submission queue
+    // has already waited for preceding GPU work before completing this frame.
     std::lock_guard pacingLock(m_pacingMutex);
     m_fpsLimiter.delay();
     signalFrameValue(frameId);
