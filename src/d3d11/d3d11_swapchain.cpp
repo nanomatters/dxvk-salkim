@@ -258,6 +258,8 @@ namespace dxvk {
           UINT                      PresentFlags,
     const DXGI_PRESENT_PARAMETERS*  pPresentParameters) {
     HRESULT hr = S_OK;
+    const bool flipModel = m_desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
+                        || m_desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD;
 
     if (m_device->getDeviceStatus() != VK_SUCCESS)
       hr = DXGI_ERROR_DEVICE_RESET;
@@ -267,7 +269,8 @@ namespace dxvk {
         return hr;
 
       VkResult status = m_presenter->checkSwapChainStatus();
-      return status == VK_SUCCESS ? S_OK : DXGI_STATUS_OCCLUDED;
+      return status == VK_SUCCESS || (status == VK_NOT_READY && flipModel)
+        ? S_OK : DXGI_STATUS_OCCLUDED;
     }
 
     if (hr != S_OK) {
@@ -283,9 +286,8 @@ namespace dxvk {
     }
 
     // Ensure to synchronize and release the frame latency semaphore
-    // even if presentation failed with STATUS_OCCLUDED, or otherwise
-    // applications using the semaphore may deadlock. This works because
-    // we do not increment the frame ID in those situations.
+    // even when no image was displayed. Discarded flips queue a completion
+    // signal, while failed presents leave the frame ID unchanged.
     SyncFrameLatency();
 
     // Ignore latency stuff if presentation failed
@@ -299,7 +301,10 @@ namespace dxvk {
     if (m_latencyHud)
       m_latencyHud->accumulateStats(latencyStats);
 
-    return hr;
+    // Flip-model presents succeed even when no window image can be displayed.
+    // Keep the internal occlusion result until after latency accounting so a
+    // discarded frame does not produce presentation timing or Reflex markers.
+    return hr == DXGI_STATUS_OCCLUDED && flipModel ? S_OK : hr;
   }
 
 
@@ -411,6 +416,9 @@ namespace dxvk {
   HRESULT D3D11SwapChain::PresentImage(
             UINT                      SyncInterval,
       const DXGI_PRESENT_PARAMETERS*  pPresentParameters) {
+    bool flipModel = m_desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL ||
+                     m_desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
     // Flush pending rendering commands before
     auto immediateContext = m_parent->GetContext();
     auto immediateContextLock = immediateContext->LockContext();
@@ -435,13 +443,8 @@ namespace dxvk {
     if (status < 0)
       return E_FAIL;
 
-    if (status == VK_NOT_READY)
+    if (status == VK_NOT_READY && !flipModel)
       return DXGI_STATUS_OCCLUDED;
-
-    VkExtent2D dstSize = { backBuffer->info().extent.width, backBuffer->info().extent.height };
-
-    VkRect2D srcRect = ComputeSrcPresentRect();
-    VkRect2D dstRect = ComputeDstPresentRect(dstSize, srcRect.extent);
 
     // Incremental presentation is only supported with flip model presentation
     // on native, not 100% sure about the exact validation here.
@@ -455,11 +458,45 @@ namespace dxvk {
       return DXGI_ERROR_INVALID_CALL;
     }
 
+    // Accepted flips must retain partial updates even without a WSI image.
+    if (incrementalPresent) {
+      CompositeIncrementalPresent(immediateContext, pPresentParameters);
+    } else {
+      // Nuke incremental present image out of existence to
+      // save memory, also to pick the correct source image
+      m_compositionBuffer = nullptr;
+      m_compositionScroll = nullptr;
+    }
+
+    if (status == VK_NOT_READY) {
+      // Complete a discarded flip after the application's GPU work. There is
+      // no WSI image, but buffer rotation, present counts and the latency
+      // waitable object must still advance just like a visible present.
+      m_frameId += 1;
+      immediateContext->EmitCs([
+        cDevice    = m_device,
+        cPresenter = m_presenter,
+        cFrameId   = m_frameId
+      ] (DxvkContext* ctx) {
+        ctx->flushCommandList(nullptr, nullptr);
+        cDevice->discardPresent(cPresenter, cFrameId);
+      });
+
+      if (m_backBuffers.size() > 1u)
+        RotateBackBuffers(immediateContext);
+
+      immediateContext->FlushCsChunk();
+      return DXGI_STATUS_OCCLUDED;
+    }
+
+    VkExtent2D dstSize = { backBuffer->info().extent.width, backBuffer->info().extent.height };
+
+    VkRect2D srcRect = ComputeSrcPresentRect();
+    VkRect2D dstRect = ComputeDstPresentRect(dstSize, srcRect.extent);
+
     DirtyRectList dirtyRects;
 
     if (incrementalPresent) {
-      CompositeIncrementalPresent(immediateContext, pPresentParameters);
-
       // Redraw everything if the HUD is active since we don't
       // keep track of the exact screen areas there. Likewise,
       // nope out if there is any scaling going on.
@@ -470,11 +507,6 @@ namespace dxvk {
 
         dirtyRects = NormalizeDirtyRects(pPresentParameters, bounds);
       }
-    } else {
-      // Nuke incremental present image out of existence to
-      // save memory, also to pick the correct source image
-      m_compositionBuffer = nullptr;
-      m_compositionScroll = nullptr;
     }
 
     m_frameId += 1;
