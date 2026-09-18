@@ -929,6 +929,7 @@ namespace dxvk {
         cDevice         = m_device,
         cPresenter      = m_wctx->presenter,
         cBlitter        = m_blitter,
+        cHud            = m_hud,
         cColorSpace     = m_colorspace,
         cSrcView        = swapImageView,
         cSrcRect        = srcRect,
@@ -945,6 +946,10 @@ namespace dxvk {
 
           ctx->ensureImageCompatibility(cSrcView->image(), usage);
         }
+
+        // Follow destination-window changes on the same thread as HUD updates.
+        if (cHud)
+          cHud->setPresenter(cPresenter);
 
         // Blit back buffer onto Vulkan swap chain
         auto contextObjects = ctx->beginExternalRendering();
@@ -1172,6 +1177,7 @@ namespace dxvk {
 
   void D3D9SwapChainEx::CreateBlitter() {
     Rc<hud::Hud> hud = hud::Hud::createHud(m_device);
+    m_hud = hud;
 
     if (hud) {
       m_apiHud = hud->addItem<hud::HudClientApiItem>("api", 1, GetApiName());
