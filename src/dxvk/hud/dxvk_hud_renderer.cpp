@@ -228,13 +228,28 @@ namespace dxvk::hud {
 
     auto drawArgs = reinterpret_cast<VkDrawIndirectCommand*>(m_textBuffer->mapPtr(drawArgOffset));
 
-    for (size_t i = 0; i < m_textDraws.size(); i++) {
-      drawArgs[i].vertexCount = 6u * m_textDraws[i].textLength;
-      drawArgs[i].instanceCount = 1u;
-      drawArgs[i].firstVertex = 0u;
-      drawArgs[i].firstInstance = 0u;
+    uint32_t drawCount = 0;
+    bool batchRectangles = m_device->features().core.features.drawIndirectFirstInstance;
+
+    for (size_t i = 0; i < m_textDraws.size();) {
+      size_t end = i + 1;
+      if (batchRectangles && !m_textDraws[i].fontSize) {
+        while (end < m_textDraws.size() && !m_textDraws[end].fontSize)
+          end++;
+      }
+
+      auto& args = drawArgs[drawCount];
+      args.vertexCount = 6u * m_textDraws[i].textLength;
+      args.instanceCount = uint32_t(end - i);
+      args.firstVertex = 0u;
+      // The shader adds DrawID to InstanceIndex to locate the original record.
+      // With batching disabled, this is zero and the old indexing is unchanged.
+      args.firstInstance = uint32_t(i) - drawCount;
+      drawCount++;
+      i = end;
     }
 
+    drawArgWriteSize = drawCount * sizeof(VkDrawIndirectCommand);
     std::memset(m_textBuffer->mapPtr(drawArgOffset + drawArgWriteSize), 0, drawArgsSize - drawArgWriteSize);
 
     // Draw the actual text
@@ -243,7 +258,7 @@ namespace dxvk::hud {
 
     drawTextIndirect(ctx, getPipelineKey(dstView),
       drawBufferInfo, textBufferInfo,
-      m_textBufferView, m_textDraws.size());
+      m_textBufferView, drawCount);
 
     // Ensure all used resources are kept alive
     ctx->track(m_textBuffer, DxvkAccess::Read);
