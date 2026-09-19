@@ -1866,6 +1866,36 @@ namespace dxvk::hud {
   }
 
 
+  HudPos HudPresentModeItem::render(
+    const Rc<DxvkCommandList>&ctx,
+    const HudPipelineKey&     key,
+    const HudOptions&         options,
+          HudRenderer&        renderer,
+          HudPos              position) {
+    std::string_view mode;
+    switch (m_mode.load(std::memory_order_relaxed)) {
+      case VK_PRESENT_MODE_IMMEDIATE_KHR:                 mode = "IMMEDIATE"; break;
+      case VK_PRESENT_MODE_MAILBOX_KHR:                   mode = "MAILBOX"; break;
+      case VK_PRESENT_MODE_FIFO_KHR:                      mode = "FIFO"; break;
+      case VK_PRESENT_MODE_FIFO_RELAXED_KHR:               mode = "FIFO_RELAXED"; break;
+      case VK_PRESENT_MODE_FIFO_LATEST_READY_KHR:          mode = "FIFO_LATEST_READY"; break;
+      case VK_PRESENT_MODE_SHARED_DEMAND_REFRESH_KHR:     mode = "SHARED_DEMAND_REFRESH"; break;
+      case VK_PRESENT_MODE_SHARED_CONTINUOUS_REFRESH_KHR: mode = "SHARED_CONTINUOUS_REFRESH"; break;
+      default:                                           mode = "--"; break;
+    }
+
+    constexpr std::string_view label = "Present mode: ";
+    position.y += HudSmallFontSize;
+    renderer.drawText(HudSmallFontSize, position, HudGpuTelemetryLabelColor, label);
+    renderer.drawText(HudSmallFontSize,
+      { position.x + int32_t(renderer.textWidth(HudSmallFontSize, label)), position.y },
+      HudTelemetryValueColor, mode);
+
+    position.y += 8;
+    return position;
+  }
+
+
   HudDeviceInfoItem::HudDeviceInfoItem(const Rc<DxvkDevice>& device) {
     const auto& props = device->properties();
 
