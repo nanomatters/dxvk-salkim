@@ -1,6 +1,8 @@
 #include "util_sleep.h"
 #include "util_string.h"
 
+#include <algorithm>
+
 #include "./log/log.h"
 
 using namespace std::chrono_literals;
@@ -38,6 +40,8 @@ namespace dxvk {
     HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");
 
     if (ntdll) {
+      m_adaptiveSleep = ::GetProcAddress(ntdll, "wine_get_version") != nullptr;
+
       NtDelayExecution = reinterpret_cast<NtDelayExecutionProc>(
         ::GetProcAddress(ntdll, "NtDelayExecution"));
       auto NtQueryTimerResolution = reinterpret_cast<NtQueryTimerResolutionProc>(
@@ -64,6 +68,7 @@ namespace dxvk {
 #else
     // Assume 0.5ms sleep granularity by default
     m_sleepGranularity = TimerDuration(500us);
+    m_adaptiveSleep = true;
 #endif
   }
 
@@ -76,11 +81,13 @@ namespace dxvk {
     if (!m_initialized.load())
       initialize();
 
-    // Busy-wait for the last couple of milliseconds since sleeping
-    // on Windows is highly inaccurate and inconsistent.
-    TimerDuration sleepThreshold = m_sleepThreshold;
+    // Wine's reported timer granularity does not describe the host sleep
+    // precision. Learn the oversleep on each calling thread instead of
+    // spinning for several milliseconds. Keep native Windows unchanged.
+    thread_local TimerDuration sleepMargin = TimerDuration(200us);
+    TimerDuration sleepThreshold = m_adaptiveSleep ? sleepMargin : m_sleepThreshold;
 
-    if (m_sleepGranularity != TimerDuration::zero())
+    if (!m_adaptiveSleep && m_sleepGranularity != TimerDuration::zero())
       sleepThreshold += duration / 6;
 
     TimerDuration remaining = duration;
@@ -92,7 +99,18 @@ namespace dxvk {
       systemSleep(sleepDuration);
 
       t1 = dxvk::high_resolution_clock::now();
-      remaining -= std::chrono::duration_cast<TimerDuration>(t1 - t0);
+      auto elapsed = std::chrono::duration_cast<TimerDuration>(t1 - t0);
+
+      if (m_adaptiveSleep) {
+        // React immediately to late wakeups, then decay slowly. Bound the
+        // reserve so a scheduling stall cannot turn into a long busy-wait.
+        auto observed = elapsed - sleepDuration + TimerDuration(50us);
+        sleepMargin = std::clamp(std::max(observed, sleepMargin - sleepMargin / 64),
+          TimerDuration(100us), TimerDuration(1ms));
+        sleepThreshold = sleepMargin;
+      }
+
+      remaining -= elapsed;
       t0 = t1;
     }
 
