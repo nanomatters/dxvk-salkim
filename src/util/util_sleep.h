@@ -62,6 +62,7 @@ namespace dxvk {
 
     TimerDuration m_sleepGranularity = TimerDuration::zero();
     TimerDuration m_sleepThreshold   = TimerDuration::zero();
+    bool          m_adaptiveSleep    = false;
 
     Sleep();
 
