@@ -44,6 +44,7 @@ namespace dxvk {
 
     hud::HudItemSet                  m_hudItems;
     Rc<hud::HudSystemInfoItem>       m_systemInfo;
+    Rc<hud::HudPresentModeItem>      m_presentMode;
     std::vector<DXGI_VK_HUD_VERTEX> m_vertices;
     size_t                           m_vertexLimit = MaxVertices;
     dxvk::high_resolution_clock::time_point m_nextPresentationUpdate;

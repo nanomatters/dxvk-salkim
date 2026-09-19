@@ -71,6 +71,11 @@ The `DXVK_HUD` environment variable controls a HUD which can display the framera
 - `proton`: Displays the Proton build.
 - `wine`: Displays the Wine version and build.
 - `winsys`: Displays the window system, active HDR color space, and direct scanout status when available.
+- `present.mode`: Displays the Vulkan present mode, such as `FIFO`, `MAILBOX` or `IMMEDIATE`,
+  for the last successfully submitted present. Available in D3D8 through D3D12.
+  Follows dynamic mode changes and does not require presentation timing support.
+  This is the renderer's selected mode, not the compositor's final scanout behavior.
+  Shows `--` before the first successful present or while no swapchain exists.
 - `fps`: Shows the frame rate averaged over each 500 ms reporting interval.
 - `fps_lows`: Shows 1% and 0.1% low frame rates over the preceding seven seconds.
 - `fps.graph`: Shows a compact FPS history graph, also available through the D3D12 HUD.
