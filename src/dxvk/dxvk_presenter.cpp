@@ -381,6 +381,7 @@ namespace dxvk {
     }
 
     if (status >= 0) {
+      m_lastPresentMode.store(m_presentMode, std::memory_order_relaxed);
       m_acquireStatus = VK_NOT_READY;
 
       m_frameIndex += 1;
@@ -2239,6 +2240,7 @@ namespace dxvk {
     m_dynamicModes.clear();
 
     m_swapchain = VK_NULL_HANDLE;
+    m_lastPresentMode.store(VK_PRESENT_MODE_MAX_ENUM_KHR, std::memory_order_relaxed);
     m_acquireStatus = VK_NOT_READY;
 
     m_presentPending = false;

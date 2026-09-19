@@ -378,6 +378,11 @@ namespace dxvk {
      */
     PresenterTimingFeedback queryPresentTiming();
 
+    // Last successfully submitted present, or unknown before presentation.
+    VkPresentModeKHR getPresentMode() const {
+      return m_lastPresentMode.load(std::memory_order_relaxed);
+    }
+
     void setPresentTelemetryEnabled(bool enable);
 
     bool getPresentTelemetry(
@@ -443,6 +448,7 @@ namespace dxvk {
     uint64_t                    m_presentTelemetryGeneration = 0u;
 
     VkPresentModeKHR            m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    std::atomic<VkPresentModeKHR> m_lastPresentMode = { VK_PRESENT_MODE_MAX_ENUM_KHR };
 
     uint32_t                    m_imageIndex = 0;
     uint32_t                    m_frameIndex = 0;
