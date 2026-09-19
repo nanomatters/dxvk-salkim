@@ -64,6 +64,7 @@ namespace dxvk {
     m_hudItems.add<hud::HudDeviceInfoItem>("devinfo", -1,
       std::move(deviceName), std::string(), std::string());
     m_systemInfo = m_hudItems.addSystemInfoItems();
+    m_presentMode = m_hudItems.add<hud::HudPresentModeItem>("present.mode", -1);
     m_hudItems.addCpuTelemetryItems(adapter);
     m_hudItems.addGpuTelemetryItems(adapter);
     m_hudItems.addFpsItems();
@@ -90,6 +91,9 @@ namespace dxvk {
           DXGI_COLOR_SPACE_TYPE    colorSpace) {
     if (m_failed)
       return;
+
+    if (m_presentMode)
+      m_presentMode->setPresentMode(VkPresentModeKHR(presenter->GetPresentMode()));
 
     auto now = dxvk::high_resolution_clock::now();
 
