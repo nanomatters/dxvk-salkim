@@ -1,5 +1,6 @@
 #include "dxvk_hud.h"
 #include "dxvk_hud_info.h"
+#include "../dxvk_presenter.h"
 
 namespace dxvk::hud {
   
@@ -16,6 +17,9 @@ namespace dxvk::hud {
     addItem<HudVersionItem>("version", -1);
     addItem<HudDeviceInfoItem>("devinfo", -1, m_device);
     m_systemInfo = m_hudItems.addSystemInfoItems();
+    m_presentMode = addItem<HudPresentModeItem>("present.mode", -1);
+    if (m_presentMode)
+      m_presenter = presenter;
     m_hudItems.addCpuTelemetryItems(device->adapter());
     m_hudItems.addGpuTelemetryItems(device->adapter());
     m_hudItems.addFpsItems();
@@ -42,12 +46,18 @@ namespace dxvk::hud {
 
 
   void Hud::setPresenter(const Rc<Presenter>& presenter) {
+    if (m_presentMode)
+      m_presenter = presenter;
     if (m_presentTelemetry)
       m_presentTelemetry->setPresenter(presenter);
   }
 
 
   void Hud::update(VkColorSpaceKHR colorSpace) {
+    if (m_presentMode)
+      m_presentMode->setPresentMode(m_presenter != nullptr
+        ? m_presenter->getPresentMode() : VK_PRESENT_MODE_MAX_ENUM_KHR);
+
     auto now = dxvk::high_resolution_clock::now();
 
     // Visibility must keep updating when hidden, including without a winsys item.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -624,6 +625,31 @@ namespace dxvk::hud {
 
     sync::Spinlock  m_mutex;
     std::string     m_api;
+
+  };
+
+
+  /**
+   * \brief HUD item to display the selected Vulkan present mode
+   */
+  class HudPresentModeItem : public HudItem {
+
+  public:
+
+    void setPresentMode(VkPresentModeKHR mode) {
+      m_mode.store(mode, std::memory_order_relaxed);
+    }
+
+    HudPos render(
+      const Rc<DxvkCommandList>&ctx,
+      const HudPipelineKey&     key,
+      const HudOptions&         options,
+            HudRenderer&        renderer,
+            HudPos              position) override;
+
+  private:
+
+    std::atomic<VkPresentModeKHR> m_mode = { VK_PRESENT_MODE_MAX_ENUM_KHR };
 
   };
 
