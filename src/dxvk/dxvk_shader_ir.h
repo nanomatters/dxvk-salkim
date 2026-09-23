@@ -200,6 +200,7 @@ namespace dxvk {
 
     void serializeIr(const dxbc_spv::ir::Builder& builder);
 
+    // The destination must be a freshly constructed IR builder.
     void deserializeIr(dxbc_spv::ir::Builder& builder) const;
 
     void dumpSource(const std::string& dumpPath);
