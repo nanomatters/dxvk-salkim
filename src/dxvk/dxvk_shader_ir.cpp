@@ -2292,7 +2292,7 @@ namespace dxvk {
   void DxvkIrShader::deserializeIr(dxbc_spv::ir::Builder& builder) const {
     dxbc_spv::ir::Deserializer deserializer(m_ir.data(), m_ir.size());
 
-    if (!deserializer.deserializeFresh(builder))
+    if (!deserializer.deserialize(builder))
       throw DxvkError("Failed to deserialize shader");
   }
 
