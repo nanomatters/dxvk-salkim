@@ -1,5 +1,10 @@
 # DXVK
 
+This is the Salkim/Wineland fork maintained by Erhan Bilgili, with changes to
+the HUD, presentation, telemetry and shader integration. It is not an unmodified
+upstream DXVK release. Original copyright and licensing remain in LICENSE;
+the HUD font data has its own OFL license in that file.
+
 A Vulkan-based translation layer for Direct3D 8/9/10/11 which allows running 3D applications on Linux using Wine.
 
 For the current status of the project, please refer to the [project wiki](https://github.com/doitsujin/dxvk/wiki).
