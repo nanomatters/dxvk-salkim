@@ -1,7 +1,7 @@
 # DXVK
 
 This is the Salkim/Wineland fork maintained by Erhan Bilgili, with changes to
-the HUD, presentation, telemetry and shader-cache handling. It is not an unmodified
+the HUD, presentation, telemetry and shader integration. It is not an unmodified
 upstream DXVK release. Original copyright and licensing remain in LICENSE;
 the HUD font data has its own OFL license in that file.
 
