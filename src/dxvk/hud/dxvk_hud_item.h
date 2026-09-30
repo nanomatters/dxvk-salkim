@@ -587,11 +587,13 @@ namespace dxvk::hud {
 
 
   /**
-   * \brief HUD item to display DXVK version
+   * \brief HUD item to display the renderer version
    */
   class HudVersionItem : public HudItem {
 
   public:
+
+    explicit HudVersionItem(std::string version = { });
 
     HudPos render(
       const Rc<DxvkCommandList>&ctx,
@@ -599,6 +601,10 @@ namespace dxvk::hud {
       const HudOptions&         options,
             HudRenderer&        renderer,
             HudPos              position);
+
+  private:
+
+    std::string m_version;
 
   };
 
