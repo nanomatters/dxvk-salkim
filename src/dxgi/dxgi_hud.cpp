@@ -4,11 +4,33 @@
 
 #include <algorithm>
 #include <array>
+#include <d3d12.h>
 
 #include "../dxvk/hud/dxvk_hud_font.h"
 #include "../dxvk/hud/dxvk_hud_info.h"
 
 namespace dxvk {
+
+  static std::string getRendererVersion(IDXGIVkSwapChain* presenter) {
+    // Private ID3D12Object data shared with VKD3D: a NUL-terminated UTF-8
+    // renderer name and build version, including the terminating byte.
+    static const GUID rendererVersionGuid = {
+      0x6af3f90b, 0x371c, 0x4260, { 0x81, 0x32, 0x47, 0x79, 0x33, 0x99, 0x02, 0x77 }
+    };
+
+    Com<ID3D12Object> device;
+    std::array<char, 256> version = { };
+    UINT size = version.size();
+
+    if (SUCCEEDED(presenter->GetDevice(__uuidof(ID3D12Object),
+          reinterpret_cast<void**>(&device))) && device
+     && SUCCEEDED(device->GetPrivateData(rendererVersionGuid, &size, version.data()))
+     && size > 1 && size <= version.size() && version[0] && !version[size - 1])
+      return version.data();
+
+    return "VKD3D";
+  }
+
 
   std::unique_ptr<DxgiHud> DxgiHud::create(
           IDXGIAdapter*           adapter,
@@ -60,7 +82,8 @@ namespace dxvk {
   : m_hudItems(std::move(config), fpsLowsWindow),
     m_toggleEnabled(hud::isHudToggleEnabled()),
     m_hidden(m_hudItems.isExplicitlyEnabled("hide")) {
-    m_hudItems.add<hud::HudVersionItem>("version", -1);
+    if (m_hudItems.isEnabled("version"))
+      m_hudItems.add<hud::HudVersionItem>("version", -1, getRendererVersion(presenter));
     m_hudItems.add<hud::HudDeviceInfoItem>("devinfo", -1,
       std::move(deviceName), std::string(), std::string());
     m_systemInfo = m_hudItems.addSystemInfoItems();
