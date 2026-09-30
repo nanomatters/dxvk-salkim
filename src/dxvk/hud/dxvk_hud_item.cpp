@@ -1820,6 +1820,12 @@ namespace dxvk::hud {
   }
 
 
+  HudVersionItem::HudVersionItem(std::string version)
+  : m_version(version.empty() ? "DXVK-SALKIM " DXVK_VERSION : std::move(version)) {
+
+  }
+
+
   HudPos HudVersionItem::render(
     const Rc<DxvkCommandList>&ctx,
     const HudPipelineKey&     key,
@@ -1827,7 +1833,7 @@ namespace dxvk::hud {
           HudRenderer&        renderer,
           HudPos              position) {
     position.y += HudSmallFontSize;
-    renderer.drawText(HudSmallFontSize, position, 0xffffffffu, "DXVK " DXVK_VERSION);
+    renderer.drawText(HudSmallFontSize, position, 0xffffffffu, m_version);
 
     position.y += 8;
     return position;
