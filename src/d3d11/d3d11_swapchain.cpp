@@ -452,7 +452,8 @@ namespace dxvk {
     if (status != VK_SUCCESS && m_latency)
       m_latency->discardTimings();
 
-    if (status < 0)
+    // Only successful image acquisitions may populate the WSI back buffer.
+    if (status != VK_SUCCESS && status != VK_SUBOPTIMAL_KHR && status != VK_NOT_READY)
       return E_FAIL;
 
     if (status == VK_NOT_READY && !flipModel)
