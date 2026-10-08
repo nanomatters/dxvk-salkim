@@ -159,7 +159,7 @@ namespace dxvk {
 
     updateSwapChain();
 
-    // Acquire unless the previous present requires swapchain recreation.
+    // Don't acquire if we already did so after present.
     if (m_acquireStatus == VK_NOT_READY && m_swapchain) {
       PresenterSync& sync = m_semaphores.at(m_frameIndex);
 
@@ -407,8 +407,19 @@ namespace dxvk {
 
     pushFrame(frame);
 
-    // Leave acquisition to the application thread. Waiting for WSI here
-    // would hold the submission queue lock and delay unrelated GPU work.
+    // On a successful present, acquire the next image early to hide
+    // potential delays from the application thread.
+    if (status == VK_SUCCESS) {
+      PresenterSync& nextSync = m_semaphores.at(m_frameIndex);
+
+      // If fence reuse fails, leave acquisition to the application thread
+      // so it can retry without changing the result of this present.
+      if (waitForSwapchainFence(nextSync) == VK_SUCCESS) {
+        m_acquireStatus = m_vkd->vkAcquireNextImageKHR(m_vkd->device(),
+          m_swapchain, std::numeric_limits<uint64_t>::max(),
+          nextSync.acquire, VK_NULL_HANDLE, &m_imageIndex);
+      }
+    }
 
     // Recreate the swapchain on the next acquire, even if we get suboptimal.
     // There is no guarantee that suboptimal state is returned by both functions.
