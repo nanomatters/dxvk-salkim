@@ -141,6 +141,8 @@ namespace dxvk {
   VkResult Presenter::acquireNextImage(PresenterSync& sync, Rc<DxvkImage>& image) {
     std::unique_lock lock(m_surfaceMutex);
 
+    image = nullptr;
+
     // Don't acquire more than one image at a time
     VkResult status = VK_SUCCESS;
 
@@ -193,7 +195,7 @@ namespace dxvk {
         m_swapchain, std::numeric_limits<uint64_t>::max(),
         sync.acquire, VK_NULL_HANDLE, &m_imageIndex);
 
-      if (m_acquireStatus < 0) {
+      if (m_acquireStatus != VK_SUCCESS && m_acquireStatus != VK_SUBOPTIMAL_KHR) {
         Logger::info(str::format("Presenter: Got ", m_acquireStatus, " from fresh swapchain"));
         return softError(m_acquireStatus);
       }
@@ -1075,8 +1077,13 @@ namespace dxvk {
     // Import actual swap chain images
     std::vector<VkImage> images;
 
-    if ((status = getSwapImages(images)))
+    if ((status = getSwapImages(images))) {
+      // No images have been acquired or imported from this swapchain yet.
+      m_vkd->vkDestroySwapchainKHR(m_vkd->device(), m_swapchain, nullptr);
+      m_swapchain = VK_NULL_HANDLE;
+      m_timingMode = { };
       return status;
+    }
     
     for (uint32_t i = 0; i < images.size(); i++) {
       std::string debugName = str::format("Vulkan swap image ", i);
@@ -1191,8 +1198,6 @@ namespace dxvk {
 
 
   VkResult Presenter::getSupportedFormats(std::vector<VkSurfaceFormatKHR>& formats) const {
-    uint32_t numFormats = 0;
-
     VkSurfaceFullScreenExclusiveInfoEXT fullScreenInfo = { VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT };
     fullScreenInfo.fullScreenExclusive = m_fullscreenMode;
 
@@ -1202,46 +1207,63 @@ namespace dxvk {
     if (m_device->features().extFullScreenExclusive)
       fullScreenInfo.pNext = const_cast<void*>(std::exchange(surfaceInfo.pNext, &fullScreenInfo));
 
-    VkResult status;
-    if (m_device->instance()->extensions().khrGetSurfaceCapabilities2.specVersion) {
-      status = m_vki->vkGetPhysicalDeviceSurfaceFormats2KHR(
-        m_device->adapter()->handle(), &surfaceInfo, &numFormats, nullptr);
-    } else {
-      status = m_vki->vkGetPhysicalDeviceSurfaceFormatsKHR(
-        m_device->adapter()->handle(), surfaceInfo.surface, &numFormats, nullptr);
+    // Output changes can grow the list between count and data queries.
+    // Bound retries so a changing surface cannot stall the application.
+    VkResult status = VK_INCOMPLETE;
+    for (uint32_t attempt = 0; attempt < 4 && status == VK_INCOMPLETE; attempt++) {
+      uint32_t numFormats = 0;
+
+      if (m_device->instance()->extensions().khrGetSurfaceCapabilities2.specVersion) {
+        status = m_vki->vkGetPhysicalDeviceSurfaceFormats2KHR(
+          m_device->adapter()->handle(), &surfaceInfo, &numFormats, nullptr);
+      } else {
+        status = m_vki->vkGetPhysicalDeviceSurfaceFormatsKHR(
+          m_device->adapter()->handle(), surfaceInfo.surface, &numFormats, nullptr);
+      }
+
+      if (status != VK_SUCCESS)
+        break;
+
+      if (!numFormats) {
+        status = VK_NOT_READY;
+        break;
+      }
+
+      formats.resize(numFormats);
+
+      if (m_device->instance()->extensions().khrGetSurfaceCapabilities2.specVersion) {
+        std::vector<VkSurfaceFormat2KHR> tmpFormats(numFormats,
+          { VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR, nullptr, VkSurfaceFormatKHR() });
+
+        status = m_vki->vkGetPhysicalDeviceSurfaceFormats2KHR(
+          m_device->adapter()->handle(), &surfaceInfo, &numFormats, tmpFormats.data());
+
+        if (status == VK_SUCCESS) {
+          for (uint32_t i = 0; i < numFormats; i++)
+            formats[i] = tmpFormats[i].surfaceFormat;
+        }
+      } else {
+        status = m_vki->vkGetPhysicalDeviceSurfaceFormatsKHR(
+          m_device->adapter()->handle(), surfaceInfo.surface, &numFormats, formats.data());
+      }
+
+      if (status == VK_SUCCESS) {
+        formats.resize(numFormats);
+        if (formats.empty())
+          status = VK_NOT_READY;
+      }
     }
 
     if (status != VK_SUCCESS) {
+      formats.clear();
       Logger::err(str::format("Presenter: Failed to query surface formats: ", status));
-      return status;
     }
-    
-    formats.resize(numFormats);
-
-    if (m_device->instance()->extensions().khrGetSurfaceCapabilities2.specVersion) {
-      std::vector<VkSurfaceFormat2KHR> tmpFormats(numFormats,
-        { VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR, nullptr, VkSurfaceFormatKHR() });
-
-      status = m_vki->vkGetPhysicalDeviceSurfaceFormats2KHR(
-        m_device->adapter()->handle(), &surfaceInfo, &numFormats, tmpFormats.data());
-
-      for (uint32_t i = 0; i < numFormats; i++)
-        formats[i] = tmpFormats[i].surfaceFormat;
-    } else {
-      status = m_vki->vkGetPhysicalDeviceSurfaceFormatsKHR(
-        m_device->adapter()->handle(), surfaceInfo.surface, &numFormats, formats.data());
-    }
-
-    if (status != VK_SUCCESS)
-      Logger::err(str::format("Presenter: Failed to query surface formats: ", status));
 
     return status;
   }
 
   
   VkResult Presenter::getSupportedPresentModes(std::vector<VkPresentModeKHR>& modes) const {
-    uint32_t numModes = 0;
-
     VkSurfaceFullScreenExclusiveInfoEXT fullScreenInfo = { VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT };
     fullScreenInfo.fullScreenExclusive = m_fullscreenMode;
 
@@ -1251,56 +1273,84 @@ namespace dxvk {
     if (m_device->features().extFullScreenExclusive)
       fullScreenInfo.pNext = const_cast<void*>(std::exchange(surfaceInfo.pNext, &fullScreenInfo));
 
-    VkResult status;
+    VkResult status = VK_INCOMPLETE;
+    for (uint32_t attempt = 0; attempt < 4 && status == VK_INCOMPLETE; attempt++) {
+      uint32_t numModes = 0;
 
-    if (m_device->features().extFullScreenExclusive) {
-      status = m_vki->vkGetPhysicalDeviceSurfacePresentModes2EXT(
-        m_device->adapter()->handle(), &surfaceInfo, &numModes, nullptr);
-    } else {
-      status = m_vki->vkGetPhysicalDeviceSurfacePresentModesKHR(
-        m_device->adapter()->handle(), surfaceInfo.surface, &numModes, nullptr);
+      if (m_device->features().extFullScreenExclusive) {
+        status = m_vki->vkGetPhysicalDeviceSurfacePresentModes2EXT(
+          m_device->adapter()->handle(), &surfaceInfo, &numModes, nullptr);
+      } else {
+        status = m_vki->vkGetPhysicalDeviceSurfacePresentModesKHR(
+          m_device->adapter()->handle(), surfaceInfo.surface, &numModes, nullptr);
+      }
+
+      if (status != VK_SUCCESS)
+        break;
+
+      if (!numModes) {
+        status = VK_NOT_READY;
+        break;
+      }
+
+      modes.resize(numModes);
+
+      if (m_device->features().extFullScreenExclusive) {
+        status = m_vki->vkGetPhysicalDeviceSurfacePresentModes2EXT(
+          m_device->adapter()->handle(), &surfaceInfo, &numModes, modes.data());
+      } else {
+        status = m_vki->vkGetPhysicalDeviceSurfacePresentModesKHR(
+          m_device->adapter()->handle(), surfaceInfo.surface, &numModes, modes.data());
+      }
+
+      if (status == VK_SUCCESS) {
+        modes.resize(numModes);
+        if (modes.empty())
+          status = VK_NOT_READY;
+      }
     }
 
     if (status != VK_SUCCESS) {
+      modes.clear();
       Logger::err(str::format("Presenter: Failed to query present modes: ", status));
-      return status;
     }
-    
-    modes.resize(numModes);
-
-    if (m_device->features().extFullScreenExclusive) {
-      status = m_vki->vkGetPhysicalDeviceSurfacePresentModes2EXT(
-        m_device->adapter()->handle(), &surfaceInfo, &numModes, modes.data());
-    } else {
-      status = m_vki->vkGetPhysicalDeviceSurfacePresentModesKHR(
-        m_device->adapter()->handle(), surfaceInfo.surface, &numModes, modes.data());
-    }
-
-    if (status != VK_SUCCESS)
-      Logger::err(str::format("Presenter: Failed to query present modes: ", status));
 
     return status;
   }
 
 
   VkResult Presenter::getSwapImages(std::vector<VkImage>& images) {
-    uint32_t imageCount = 0;
+    VkResult status = VK_INCOMPLETE;
+    for (uint32_t attempt = 0; attempt < 4 && status == VK_INCOMPLETE; attempt++) {
+      uint32_t imageCount = 0;
 
-    VkResult status = m_vkd->vkGetSwapchainImagesKHR(
-      m_vkd->device(), m_swapchain, &imageCount, nullptr);
-    
-    if (status != VK_SUCCESS) {
-      Logger::err(str::format("Presenter: Failed to query swapchain images: ", status));
-      return status;
+      status = m_vkd->vkGetSwapchainImagesKHR(
+        m_vkd->device(), m_swapchain, &imageCount, nullptr);
+
+      if (status != VK_SUCCESS)
+        break;
+
+      if (!imageCount) {
+        status = VK_NOT_READY;
+        break;
+      }
+
+      images.resize(imageCount);
+
+      status = m_vkd->vkGetSwapchainImagesKHR(
+        m_vkd->device(), m_swapchain, &imageCount, images.data());
+
+      if (status == VK_SUCCESS) {
+        images.resize(imageCount);
+        if (images.empty())
+          status = VK_NOT_READY;
+      }
     }
-    
-    images.resize(imageCount);
 
-    status = m_vkd->vkGetSwapchainImagesKHR(
-      m_vkd->device(), m_swapchain, &imageCount, images.data());
-
-    if (status != VK_SUCCESS)
+    if (status != VK_SUCCESS) {
+      images.clear();
       Logger::err(str::format("Presenter: Failed to query swapchain images: ", status));
+    }
 
     return status;
   }
@@ -2533,7 +2583,7 @@ namespace dxvk {
     // chain and move on. An alternative would be to handle errors in a
     // loop, however this may also not be desireable since it could stall
     // the app indefinitely in case the surface is in a weird state.
-    if (vr == VK_ERROR_SURFACE_LOST_KHR || vr == VK_ERROR_OUT_OF_DATE_KHR)
+    if (vr == VK_ERROR_SURFACE_LOST_KHR || vr == VK_ERROR_OUT_OF_DATE_KHR || vr == VK_INCOMPLETE)
       return VK_NOT_READY;
 
     return vr;

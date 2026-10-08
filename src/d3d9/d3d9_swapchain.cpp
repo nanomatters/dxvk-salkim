@@ -901,7 +901,7 @@ namespace dxvk {
 
     status = m_wctx->presenter->acquireNextImage(sync, backBuffer);
 
-    if (status >= 0 && status != VK_NOT_READY) {
+    if (status == VK_SUCCESS || status == VK_SUBOPTIMAL_KHR) {
       VkRect2D srcRect = {
         {  int32_t(m_srcRect.left),                    int32_t(m_srcRect.top)                    },
         { uint32_t(m_srcRect.right - m_srcRect.left), uint32_t(m_srcRect.bottom - m_srcRect.top) } };
@@ -989,7 +989,7 @@ namespace dxvk {
       m_latencyHud->accumulateStats(latencyStats);
 
     RotateBackBuffers();
-    return status >= 0 && status != VK_NOT_READY;
+    return status == VK_SUCCESS || status == VK_SUBOPTIMAL_KHR;
   }
 
 
