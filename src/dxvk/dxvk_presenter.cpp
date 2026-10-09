@@ -758,6 +758,25 @@ namespace dxvk {
     if (hdrMetadata.pNext)
       Logger::warn("Presenter: HDR metadata extensions not currently supported.");
 
+    if (m_hdrMetadata) {
+      const auto& current = *m_hdrMetadata;
+
+      // Keep pending updates, including metadata replay after swapchain recreation.
+      if (current.displayPrimaryRed.x         == hdrMetadata.displayPrimaryRed.x
+       && current.displayPrimaryRed.y         == hdrMetadata.displayPrimaryRed.y
+       && current.displayPrimaryGreen.x       == hdrMetadata.displayPrimaryGreen.x
+       && current.displayPrimaryGreen.y       == hdrMetadata.displayPrimaryGreen.y
+       && current.displayPrimaryBlue.x        == hdrMetadata.displayPrimaryBlue.x
+       && current.displayPrimaryBlue.y        == hdrMetadata.displayPrimaryBlue.y
+       && current.whitePoint.x                == hdrMetadata.whitePoint.x
+       && current.whitePoint.y                == hdrMetadata.whitePoint.y
+       && current.maxLuminance                == hdrMetadata.maxLuminance
+       && current.minLuminance                == hdrMetadata.minLuminance
+       && current.maxContentLightLevel        == hdrMetadata.maxContentLightLevel
+       && current.maxFrameAverageLightLevel   == hdrMetadata.maxFrameAverageLightLevel)
+        return;
+    }
+
     m_hdrMetadata = hdrMetadata;
     m_hdrMetadata->pNext = nullptr;
 
