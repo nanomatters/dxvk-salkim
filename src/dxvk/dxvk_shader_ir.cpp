@@ -57,7 +57,7 @@ namespace dxvk {
 
 
     void message(dxbc_spv::util::LogLevel severity, const char* message) override {
-      dxvk::Logger::log(convertLogLevel(severity), m_debugName + ": " + message);
+      dxvk::Logger::log(convertLogLevel(severity), "dxbc-spirv-salkim: " + m_debugName + ": " + message);
     }
 
     dxbc_spv::util::LogLevel getMinimumSeverity() override {
