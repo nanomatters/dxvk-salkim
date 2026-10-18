@@ -67,6 +67,7 @@ namespace dxvk::hud {
       m_hidden = m_hudItems.isExplicitlyEnabled("hide")
         != (m_toggleEnabled && (feedback & WineDisplayFeedbackHudVisibility));
       bool directScanout = feedback & WineDisplayFeedbackDirectScanout;
+      bool variableRefresh = feedback & WineDisplayFeedbackVariableRate;
 
       HudPresentationColorSpace hudColorSpace = HudPresentationColorSpace::Sdr;
       if (m_hasDxgiColorSpace) {
@@ -77,7 +78,7 @@ namespace dxvk::hud {
       }
 
       if (m_systemInfo)
-        m_systemInfo->setPresentationStatus(hudColorSpace, directScanout);
+        m_systemInfo->setPresentationStatus(hudColorSpace, directScanout, variableRefresh);
       m_nextPresentationUpdate = now + std::chrono::seconds(1);
     }
 

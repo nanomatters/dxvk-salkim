@@ -564,7 +564,8 @@ namespace dxvk::hud {
 
     void setPresentationStatus(
             HudPresentationColorSpace colorSpace,
-            bool                      directScanout);
+            bool                      directScanout,
+            bool                      variableRefresh);
 
     HudPos render(
       const Rc<DxvkCommandList>&ctx,

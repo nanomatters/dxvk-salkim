@@ -1792,7 +1792,8 @@ namespace dxvk::hud {
 
   void HudSystemInfoItem::setPresentationStatus(
           HudPresentationColorSpace colorSpace,
-          bool                      directScanout) {
+          bool                      directScanout,
+          bool                      variableRefresh) {
     if (m_displayLine >= m_lines.size())
       return;
 
@@ -1805,6 +1806,8 @@ namespace dxvk::hud {
 
     if (directScanout)
       value += " | DSO";
+    if (variableRefresh)
+      value += " | VRR";
 
     m_lines[m_displayLine].value = std::move(value);
   }

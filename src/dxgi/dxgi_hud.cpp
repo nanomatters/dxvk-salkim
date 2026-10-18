@@ -131,8 +131,9 @@ namespace dxvk {
         hudColorSpace = hud::HudPresentationColorSpace::ScRgb;
 
       bool directScanout = feedback & hud::WineDisplayFeedbackDirectScanout;
+      bool variableRefresh = feedback & hud::WineDisplayFeedbackVariableRate;
       if (m_systemInfo)
-        m_systemInfo->setPresentationStatus(hudColorSpace, directScanout);
+        m_systemInfo->setPresentationStatus(hudColorSpace, directScanout, variableRefresh);
       m_nextPresentationUpdate = now + std::chrono::seconds(1);
     }
 
