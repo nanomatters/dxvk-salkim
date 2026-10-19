@@ -93,6 +93,8 @@ struct Presenter {
   VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
   VkPresentModeKHR m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
   bool m_hasPresentWait = true;
+  bool m_hasPresentId = true;
+  struct { uint64_t frameIntervalNs = 1000u; } m_timingMode;
   bool timingAvailable = false;
   bool qpcAvailable = false;
   uint64_t translatedTarget = 2000u;
@@ -115,6 +117,10 @@ struct Presenter {
   uint64_t translateTimestamp(VkTimeDomainKHR, uint64_t, uint64_t,
                              VkTimeDomainKHR, uint64_t) { return translatedTarget; }
   void signalFrameValue(uint64_t id) { m_signal->current = id; }
+  void pushFrame(const PresenterFrame& frame) { m_frameQueue[0] = frame; }
+  void snapshotFrame(uint64_t frameId, const Rc<DxvkLatencyTracker>& tracker,
+                     VkResult status, uint64_t frameTargetTime,
+                     const VkPresentTimingInfoEXT& timingInfo);
   bool waitUntilFrameTargetTime(const PresenterFrame& frame);
   void runFrameThread();
 };
@@ -168,10 +174,145 @@ static void modeCases() {
     true, true, VK_ERROR_OUT_OF_DATE_KHR, 0u);
 }
 
+struct TimingCase {
+  const char* name;
+  uint64_t requestedTime = 2000u;
+  uint64_t expectedTime = 2000u;
+  VkPresentStageFlagsEXT queries = VK_PRESENT_STAGE_IMAGE_FIRST_PIXEL_OUT_BIT_EXT;
+  VkResult presentResult = VK_SUCCESS;
+  bool hasPresentId = true;
+  bool timingAvailable = true;
+  bool qpcAvailable = true;
+  uint64_t translatedTime = 2000u;
+  uint32_t expectedSleeps = 1u;
+  uint32_t expectedWaits = 0u;
+  bool wait2 = false;
+  bool waitSupported = true;
+  uint64_t frameId = 1u;
+  VkPresentTimingInfoFlagsEXT flags = 0u;
+  bool expectedTimed = true;
+};
+
+static void timingCase(const TimingCase& test) {
+  Presenter presenter;
+  presenter.m_hasPresentId = test.hasPresentId;
+  presenter.m_hasPresentWait = test.waitSupported;
+  presenter.timingAvailable = test.timingAvailable;
+  presenter.qpcAvailable = test.qpcAvailable;
+  presenter.translatedTarget = test.translatedTime;
+  presenter.m_device->value.khrPresentWait2.presentWait2 = test.wait2;
+  VkPresentTimingInfoEXT timing = { VK_STRUCTURE_TYPE_PRESENT_TIMING_INFO_EXT };
+  timing.targetTime = test.requestedTime;
+  timing.flags = test.flags;
+  timing.presentStageQueries = test.queries;
+  timing.timeDomainId = 7u;
+  presenter.snapshotFrame(test.frameId, nullptr, test.presentResult, test.expectedTime, timing);
+
+  check(presenter.m_frameQueue[0].targetTime == test.expectedTime, test.name, "snapshot target retained");
+  check(presenter.m_frameQueue[0].timingDomainId == 7u, test.name, "snapshot time domain retained");
+#if TEST_HAS_IS_TIMED
+  check(presenter.m_frameQueue[0].isTimed == test.expectedTimed, test.name, "snapshot timing request accepted");
+#endif
+  Sleep::targets.clear();
+  presenter.runFrameThread();
+
+  check(Sleep::targets.size() == test.expectedSleeps, test.name, "target sleep count");
+  if (test.expectedSleeps)
+    check(Sleep::targets[0] == test.translatedTime, test.name, "translated sleep target");
+  check(presenter.m_vkd->wait1 == (test.wait2 ? 0u : test.expectedWaits), test.name, "KHR fallback count");
+  check(presenter.m_vkd->wait2 == (test.wait2 ? test.expectedWaits : 0u), test.name, "KHR2 fallback count");
+  if (test.frameId) {
+    check(presenter.timingPolls == 1u, test.name, "feedback polled even for untimed frames");
+    check(presenter.m_fpsLimiter.calls == (test.expectedSleeps ? 0u : 1u), test.name, "limiter fallback count");
+    check(presenter.m_signal->current == test.frameId, test.name, "frame completion signalled");
+  } else {
+    check(!presenter.timingPolls && !presenter.m_fpsLimiter.calls && !presenter.m_signal->current,
+      test.name, "sentinel does not wait or signal");
+  }
+}
+
+static void timingCases() {
+  TimingCase test { "reference target without requested timing" };
+  test.requestedTime = 0u;
+  test.expectedTimed = false;
+  test.expectedSleeps = 0u;
+  test.expectedWaits = 1u;
+  timingCase(test);
+
+  timingCase(TimingCase { "absolute timing" });
+  test = TimingCase { "relative timing" };
+  test.requestedTime = 1000u;
+  test.flags = VK_PRESENT_TIMING_INFO_PRESENT_AT_RELATIVE_TIME_BIT_EXT;
+  test.wait2 = true;
+  timingCase(test);
+
+  test = TimingCase { "no reference target yet" };
+  test.expectedTime = 0u;
+  test.expectedSleeps = 0u;
+  test.expectedWaits = 1u;
+  timingCase(test);
+
+  test = TimingCase { "no QPC domain" };
+  test.qpcAvailable = false;
+  test.expectedSleeps = 0u;
+  test.expectedWaits = 1u;
+  test.wait2 = true;
+  timingCase(test);
+
+  test = TimingCase { "timestamp translation failed" };
+  test.translatedTime = 0u;
+  test.expectedSleeps = 0u;
+  test.expectedWaits = 1u;
+  timingCase(test);
+
+  test = TimingCase { "timing feedback failed" };
+  test.timingAvailable = false;
+  test.expectedSleeps = 0u;
+  test.expectedWaits = 1u;
+  timingCase(test);
+
+  test = TimingCase { "expired timing target" };
+  test.translatedTime = 500u;
+  timingCase(test);
+
+  test = TimingCase { "failed timed present" };
+  test.presentResult = VK_ERROR_OUT_OF_DATE_KHR;
+  test.expectedTimed = false;
+  test.expectedSleeps = 0u;
+  timingCase(test);
+
+  test = TimingCase { "suboptimal timed present" };
+  test.presentResult = VK_SUBOPTIMAL_KHR;
+  timingCase(test);
+
+  test = TimingCase { "no present ID support" };
+  test.hasPresentId = false;
+  test.expectedTimed = false;
+  test.waitSupported = false;
+  test.expectedSleeps = 0u;
+  timingCase(test);
+
+  test = TimingCase { "no timing stage query" };
+  test.queries = 0u;
+  test.expectedTimed = false;
+  test.expectedSleeps = 0u;
+  test.expectedWaits = 1u;
+  timingCase(test);
+
+  test = TimingCase { "exit sentinel" };
+  test.frameId = 0u;
+  test.expectedTimed = false;
+  test.expectedSleeps = 0u;
+  timingCase(test);
+}
+
 }
 
 int main(int argc, char** argv) {
-  if (argc != 2 || (std::string(argv[1]) != "mode" && std::string(argv[1]) != "all")) return 2;
-  dxvk::modeCases();
+  if (argc != 2) return 2;
+  std::string selection = argv[1];
+  if (selection != "mode" && selection != "timing" && selection != "all") return 2;
+  if (selection != "timing") dxvk::modeCases();
+  if (selection != "mode") dxvk::timingCases();
   std::cout << "presenter: " << dxvk::checks << " checks passed\n";
 }
