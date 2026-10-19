@@ -73,6 +73,7 @@ namespace dxvk {
     uint64_t                deadlineHost    = 0u;
     uint64_t                timingDomainId  = 0u;
     VkPresentStageFlagsEXT  stageQueries    = 0u;
+    bool                    isTimed         = false;
   };
 
   enum PresenterTelemetryValid : uint32_t {

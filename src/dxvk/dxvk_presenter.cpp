@@ -429,6 +429,8 @@ namespace dxvk {
     frame.deadlineHost = frameTargetTime.presentTimeHost ? frameTargetTime.presentTimeHost + frameIntervalTicks : 0u;
     frame.timingDomainId = timingInfo.timeDomainId;
     frame.stageQueries = timingInfo.presentStageQueries;
+    frame.isTimed = status >= 0 && frameId && m_hasPresentId
+      && timingInfo.presentStageQueries && timingInfo.targetTime;
 
     pushFrame(frame);
 
@@ -2624,7 +2626,7 @@ namespace dxvk {
       // intentionally does not line up with vblank in fixed refresh rate
       // scenarios and is done so that the application's render thread can
       // see consistent frame pacing.
-      bool waited = frame.targetStage && waitUntilFrameTargetTime(frame);
+      bool waited = frame.isTimed && frame.targetTimeHost && waitUntilFrameTargetTime(frame);
 
       // Preserve upstream FIFO completion waits alongside host-clock pacing.
       bool isFifoMode = frame.mode == VK_PRESENT_MODE_FIFO_KHR
