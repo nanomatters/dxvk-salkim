@@ -32,7 +32,7 @@ def definition(source, pattern):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", choices=("mode", "all"), default="all")
+    parser.add_argument("--case", choices=("mode", "timing", "all"), default="all")
     parser.add_argument("--revision", help="Read production source from this Git revision")
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
@@ -48,13 +48,21 @@ def main():
     source = read("src/dxvk/dxvk_presenter.cpp")
     header = read("src/dxvk/dxvk_presenter.h")
     frame = definition(header, r"  struct PresenterFrame\b") + ";\n"
+    has_timed_frame = bool(re.search(r"bool\s+isTimed\b", frame))
+    frame = f"#define TEST_HAS_IS_TIMED {int(has_timed_frame)}\n" + frame
     worker = definition(source, r"  void Presenter::runFrameThread\(\)")
     wait = definition(source, r"  bool Presenter::waitUntilFrameTargetTime\(")
+    snapshot = re.search(r"    PresenterFrame frame;[\s\S]*?    pushFrame\(frame\);", source)
+    if not snapshot:
+        raise RuntimeError("Production frame snapshot not found")
+    snapshot = """void Presenter::snapshotFrame(uint64_t frameId,
+        const Rc<DxvkLatencyTracker>& tracker, VkResult status, uint64_t frameTargetTime,
+        const VkPresentTimingInfoEXT& timingInfo) {\n""" + snapshot.group() + "\n}\n"
 
     with tempfile.TemporaryDirectory(prefix="dxvk-presenter-tests-") as temporary:
         temporary = Path(temporary)
         (temporary / "frame.h").write_text(frame)
-        (temporary / "worker.h").write_text(worker + "\n" + wait + "\n")
+        (temporary / "worker.h").write_text(worker + "\n" + wait + "\n" + snapshot)
         command = [os.environ.get("CXX", "c++"), "-std=c++17", "-O1", "-g",
                    "-Wall", "-Wextra", "-Werror", "-Wno-missing-field-initializers",
                    "-pthread", "-I", str(temporary),
