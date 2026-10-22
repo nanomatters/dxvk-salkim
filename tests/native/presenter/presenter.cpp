@@ -113,6 +113,7 @@ struct Presenter {
   Limiter m_fpsLimiter;
 
   bool updatePresentTiming(uint64_t) { ++timingPolls; return timingAvailable; }
+  void updatePresentTimingFeedback(uint64_t, VkPresentStageFlagsEXT) { ++timingPolls; }
   bool hasQpcDomain() { return qpcAvailable; }
   uint64_t translateTimestamp(VkTimeDomainKHR, uint64_t, uint64_t,
                              VkTimeDomainKHR, uint64_t) { return translatedTarget; }
@@ -265,10 +266,8 @@ static void timingCases() {
   test.expectedWaits = 1u;
   timingCase(test);
 
-  test = TimingCase { "timing feedback failed" };
+  test = TimingCase { "timing feedback failure preserves the submitted target" };
   test.timingAvailable = false;
-  test.expectedSleeps = 0u;
-  test.expectedWaits = 1u;
   timingCase(test);
 
   test = TimingCase { "expired timing target" };
