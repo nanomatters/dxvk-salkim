@@ -262,10 +262,13 @@ namespace dxvk {
     bool collectPresentTelemetry = frameId && m_timingMode.presentStage
       && m_presentTelemetryEnabled.load(std::memory_order_relaxed)
       && m_presentTelemetrySupported;
+    bool isFifoMode = m_presentMode == VK_PRESENT_MODE_FIFO_KHR
+                   || m_presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR;
 
     PresentQueueTime* queueTime = nullptr;
 
-    if (frameId && m_hasPresentId && m_timingMode.presentStage) {
+    if (frameId && m_hasPresentId && m_timingMode.presentStage
+        && (isFifoMode || collectPresentTelemetry)) {
       std::lock_guard telemetryLock(m_presentTelemetryMutex);
 
       // Share the driver's bounded queue with upstream presentation timing.
@@ -305,12 +308,6 @@ namespace dxvk {
     regionInfo.swapchainCount = 1;
     regionInfo.pRegions = &region;
 
-    // Present timing isn't useful with Immediate or Mailbox. Mailbox can also
-    // lead to the report queue overflowing when running significantly above
-    // display refresh, so don't bother with report timing.
-    bool isFifoMode = m_presentMode == VK_PRESENT_MODE_FIFO_KHR
-                   || m_presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR;
-
     auto frameTargetTime = PresenterTimingFeedback();
     auto frameIntervalTicks = uint64_t(0);
 
@@ -319,22 +316,23 @@ namespace dxvk {
     { std::lock_guard lock(m_timingMutex);
       frameTargetTime = computeFrameTargetTime(frameId);
       frameIntervalTicks = dxvk::high_resolution_clock::get_ticks(std::chrono::nanoseconds(m_timingMode.frameIntervalNs));
+      timingInfo.timeDomainId = m_timingMode.timeDomainId;
 
-      if (collectPresentTelemetry && queueTime)
-        timingInfo.presentStageQueries |= VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT
-                                       | m_presentTelemetryStage;
+      if (queueTime) {
+        timingInfo.presentStageQueries = isFifoMode ? m_timingMode.presentStage : 0u;
 
-      if (isFifoMode && queueTime && m_timingMode.presentStage) {
-        timingInfo.timeDomainId = m_timingMode.timeDomainId;
-        timingInfo.presentStageQueries |= m_timingMode.presentStage;
+        if (collectPresentTelemetry)
+          timingInfo.presentStageQueries |= VK_PRESENT_STAGE_QUEUE_OPERATIONS_END_BIT_EXT
+                                         | m_presentTelemetryStage;
+      }
 
-        // Try to avoid overflowing the driver-internal report queue. We can still
-        // work with the existing reports for a short period of time, though.
-        if (m_reportQueueAddId >= m_reportQueueTakeId + FrameQueueSize) {
-          Logger::warn("Presenter: Report queue overflow");
-          timingInfo.presentStageQueries = 0u;
-        }
+      if (timingInfo.presentStageQueries
+       && m_reportQueueAddId >= m_reportQueueTakeId + FrameQueueSize) {
+        Logger::warn("Presenter: Report queue overflow");
+        timingInfo.presentStageQueries = 0u;
+      }
 
+      if (isFifoMode && timingInfo.presentStageQueries) {
         if (m_timingMode.relativeTiming) {
           timingInfo.flags |= VK_PRESENT_TIMING_INFO_PRESENT_AT_RELATIVE_TIME_BIT_EXT;
           timingInfo.targetTime = m_timingMode.frameIntervalNs;
@@ -347,6 +345,12 @@ namespace dxvk {
             timingInfo.flags |= VK_PRESENT_TIMING_INFO_PRESENT_AT_NEAREST_REFRESH_CYCLE_BIT_EXT;
         }
       }
+    }
+
+    if (queueTime && !timingInfo.presentStageQueries) {
+      std::lock_guard telemetryLock(m_presentTelemetryMutex);
+      *queueTime = { };
+      queueTime = nullptr;
     }
 
     VkPresentTimingsInfoEXT timingsInfo = { VK_STRUCTURE_TYPE_PRESENT_TIMINGS_INFO_EXT };
@@ -2004,6 +2008,8 @@ namespace dxvk {
           if (!report.reportComplete || !report.presentId)
             continue;
 
+          m_reportQueueTakeId = std::max(m_reportQueueTakeId, report.presentId);
+
           auto entry = std::find_if(m_presentQueueTimes.begin(), m_presentQueueTimes.end(),
             [&] (const PresentQueueTime& time) { return time.presentId == report.presentId; });
 
@@ -2516,6 +2522,8 @@ namespace dxvk {
     m_timingDomains = std::nullopt;
     m_timingDisplayInfo = std::nullopt;
     m_timingMode = PresenterTimingInfo();
+    m_reportQueueAddId = 0u;
+    m_reportQueueTakeId = 0u;
 
     m_calibrationFailed = false;
     m_calibrationWarned = false;
