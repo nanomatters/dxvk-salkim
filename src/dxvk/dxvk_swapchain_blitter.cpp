@@ -482,7 +482,7 @@ namespace dxvk {
     m_hudRtv = m_hudImage->createView(viewInfo);
 
     viewInfo.usage          = VK_IMAGE_USAGE_SAMPLED_BIT;
-    // m_hudSrv = m_hudImage->createView(viewInfo);
+    m_hudSrv = m_hudImage->createView(viewInfo);
   }
 
 
