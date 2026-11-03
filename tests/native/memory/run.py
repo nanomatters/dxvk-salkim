@@ -11,6 +11,7 @@ import tempfile
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--case", choices=("eviction", "relocation", "all"), default="all")
     parser.add_argument("--revision", help="Read production source from this Git revision")
     parser.add_argument("--source", type=Path, help="Read production source from another tree")
     parser.add_argument("--sanitize", choices=("address", "thread"))
@@ -26,24 +27,38 @@ def main():
         return ((args.source or root) / path).read_text()
 
     source = read("src/dxvk/dxvk_memory.cpp")
-    production = "\n".join(definition(source, pattern) for pattern in (
-        r"  void DxvkMemoryAllocator::evictResources\(",
-        r"  void DxvkMemoryAllocator::moveDefragChunk\(",
-        r"  void DxvkMemoryAllocator::registerResource\(",
-        r"  void DxvkMemoryAllocator::unregisterResource\(",
-    ))
+    header = read("src/dxvk/dxvk_memory.h")
+    cases = ("eviction", "relocation") if args.case == "all" else (args.case,)
 
-    with tempfile.TemporaryDirectory(prefix="dxvk-memory-tests-") as temporary:
-        output = Path(temporary)
-        (output / "production.h").write_text(production)
-        command = [os.environ.get("CXX", "c++"), "-std=c++20", "-O1", "-g",
-                   "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(output),
-                   str(directory / "eviction.cpp"), "-o", str(output / "eviction")]
-        if args.sanitize:
-            sanitizer = "address,undefined" if args.sanitize == "address" else "thread"
-            command.extend([f"-fsanitize={sanitizer}", "-fno-omit-frame-pointer"])
-        subprocess.run(command, check=True)
-        subprocess.run([str(output / "eviction")], check=True, timeout=30)
+    for case in cases:
+        if case == "eviction":
+            production = "\n".join(definition(source, pattern) for pattern in (
+                r"  void DxvkMemoryAllocator::evictResources\(",
+                r"  void DxvkMemoryAllocator::moveDefragChunk\(",
+                r"  void DxvkMemoryAllocator::registerResource\(",
+                r"  void DxvkMemoryAllocator::unregisterResource\(",
+            ))
+        else:
+            production = definition(header, r"  class DxvkRelocationList\b") + ";\n"
+            production += "\n".join(definition(source, pattern) for pattern in (
+                r"  DxvkRelocationList::DxvkRelocationList\(",
+                r"  DxvkRelocationList::~DxvkRelocationList\(",
+                r"  std::vector<DxvkRelocationEntry> DxvkRelocationList::poll\(",
+                r"  bool DxvkRelocationList::addResource\(",
+                r"  void DxvkRelocationList::clear\(",
+            ))
+
+        with tempfile.TemporaryDirectory(prefix="dxvk-memory-tests-") as temporary:
+            output = Path(temporary)
+            (output / "production.h").write_text(production)
+            command = [os.environ.get("CXX", "c++"), "-std=c++20", "-O1", "-g",
+                       "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(output),
+                       str(directory / f"{case}.cpp"), "-o", str(output / case)]
+            if args.sanitize:
+                sanitizer = "address,undefined" if args.sanitize == "address" else "thread"
+                command.extend([f"-fsanitize={sanitizer}", "-fno-omit-frame-pointer"])
+            subprocess.run(command, check=True)
+            subprocess.run([str(output / case)], check=True, timeout=30)
 
 
 if __name__ == "__main__":

@@ -1135,6 +1135,7 @@ namespace dxvk {
      * \returns \c true if the list is empty
      */
     bool empty() {
+      std::lock_guard lock(m_mutex);
       return m_entries.empty();
     }
 
