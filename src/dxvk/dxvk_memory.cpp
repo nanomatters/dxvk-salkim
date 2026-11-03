@@ -2804,7 +2804,6 @@ namespace dxvk {
       if (chunkIndex >= pool.chunks.size())
         continue;
 
-      std::unique_lock lock(m_resourceMutex);
       auto& chunk = pool.chunks[chunkIndex];
 
       // Scan resources and mark everything for eviction. If a demoted
@@ -2812,22 +2811,21 @@ namespace dxvk {
       VkDeviceSize memoryEvicted = 0u;
 
       for (auto a = chunk.allocationList; a; a = a->m_nextInChunk) {
-        if (!a->flags().test(DxvkAllocationFlag::CanMove))
-          continue;
+        Rc<DxvkPagedResource> resource;
 
-        // Look up resource by its cookie
-        auto entry = m_resourceMap.find(a->m_resourceCookie.load(std::memory_order_relaxed));
+        {
+          std::lock_guard lock(m_resourceMutex);
 
-        if (entry == m_resourceMap.end())
-          continue;
+          if (!a->flags().test(DxvkAllocationFlag::CanMove))
+            continue;
 
-        // Try to acquire resource and request its eviction
-        auto resource = entry->second->tryAcquire();
+          auto entry = m_resourceMap.find(a->m_resourceCookie.load(std::memory_order_relaxed));
 
-        if (!resource)
-          continue;
+          if (entry != m_resourceMap.end() && entry->second->requestEviction())
+            resource = entry->second->tryAcquire();
+        }
 
-        if (resource->requestEviction()) {
+        if (resource) {
           if (m_relocations.addResource(std::move(resource), a, DxvkAllocationMode::NoDeviceMemory, true))
             memoryEvicted += a->getMemoryInfo().size;
         }
