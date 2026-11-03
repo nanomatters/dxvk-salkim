@@ -32,9 +32,11 @@ def definition(source, pattern):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", choices=("mode", "timing", "all"), default="all")
+    parser.add_argument("--case", choices=("mode", "timing", "feedback", "all"), default="all")
     parser.add_argument("--revision", help="Read production source from this Git revision")
-    parser.add_argument("--sanitize", action="store_true")
+    sanitizer = parser.add_mutually_exclusive_group()
+    sanitizer.add_argument("--sanitize", action="store_true")
+    sanitizer.add_argument("--thread-sanitize", action="store_true")
     args = parser.parse_args()
     directory = Path(__file__).resolve().parent
     root = directory.parents[2]
@@ -74,8 +76,22 @@ def main():
                    "-o", str(temporary / "presenter")]
         if args.sanitize:
             command.extend(["-fsanitize=address,undefined", "-fno-omit-frame-pointer"])
-        subprocess.run(command, check=True)
-        subprocess.run([str(temporary / "presenter"), args.case], check=True)
+        if args.thread_sanitize:
+            command.extend(["-fsanitize=thread", "-fno-omit-frame-pointer"])
+        if args.case != "feedback":
+            subprocess.run(command, check=True)
+            subprocess.run([str(temporary / "presenter"), args.case], check=True)
+        if args.case in ("feedback", "all"):
+            feedback = "\n".join(definition(source, pattern) for pattern in (
+                r"  PresenterTimingFeedback Presenter::updatePresentTimingFeedback\(",
+                r"  PresenterTimingFeedback Presenter::commitTimingFeedback\(",
+                r"  const PresenterFrame\* Presenter::findFrameEntry\(",
+                r"  void Presenter::pushFrame\("))
+            (temporary / "feedback.h").write_text(feedback)
+            command[command.index(str(directory / "presenter.cpp"))] = str(directory / "feedback.cpp")
+            command[command.index(str(temporary / "presenter"))] = str(temporary / "feedback")
+            subprocess.run(command, check=True)
+            subprocess.run([str(temporary / "feedback")], check=True)
 
 
 if __name__ == "__main__":

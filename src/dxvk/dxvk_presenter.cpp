@@ -1953,6 +1953,7 @@ namespace dxvk {
     feedback.presentTimeHost = frameId ? dxvk::high_resolution_clock::get_counter() : 0u;
 
     if (!m_timingMode.presentStage) {
+      std::lock_guard frameLock(m_frameMutex);
       const PresenterFrame* frameEntry = findFrameEntry(frameId);
       return commitTimingFeedback(feedback, !frameEntry || feedback.presentTimeHost > frameEntry->deadlineHost);
     }
