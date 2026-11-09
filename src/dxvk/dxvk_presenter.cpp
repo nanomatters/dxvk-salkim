@@ -835,12 +835,16 @@ namespace dxvk {
       return PresenterLatencyInfo();
 
     VkLatencyTimingsFrameReportNV report = { VK_STRUCTURE_TYPE_LATENCY_TIMINGS_FRAME_REPORT_NV };
-    getLatencyTimings(1, &report);
+    uint32_t timingCount = getLatencyTimings(1u, &report);
 
     std::lock_guard lock(m_surfaceMutex);
 
     PresenterLatencyInfo result = {};
-    result.frameLatencyUs = report.gpuRenderEndTimeUs - (report.inputSampleTimeUs ? report.inputSampleTimeUs : report.simStartTimeUs);
+    uint64_t frameStartUs = report.inputSampleTimeUs ? report.inputSampleTimeUs : report.simStartTimeUs;
+
+    if (timingCount && frameStartUs && report.gpuRenderEndTimeUs >= frameStartUs)
+      result.frameLatencyUs = report.gpuRenderEndTimeUs - frameStartUs;
+
     result.sleepCount = m_latencySleepCounter;
     result.sleepDurationUs = m_latencySleepDurationUs;
     return result;

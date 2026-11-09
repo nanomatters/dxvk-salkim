@@ -71,7 +71,15 @@ struct Dispatch {
   }
 };
 
+struct Device {
+  struct Features { bool nvLowLatency2 = true; } value;
+  const Features& features() const { return value; }
+};
+
+#include "stats.h"
+
 struct Presenter {
+  std::shared_ptr<Device> m_device = std::make_shared<Device>();
   std::mutex m_surfaceMutex;
   std::shared_ptr<Dispatch> m_vkd = std::make_shared<Dispatch>();
   bool m_latencySleepSupported = true;
@@ -81,6 +89,9 @@ struct Presenter {
   uint64_t m_latencySleepCounter = 0;
   uint64_t m_latencySleepDurationUs = 0;
   VkResult createResult = VK_SUCCESS;
+  VkLatencyTimingsFrameReportNV report = {};
+  uint32_t timingCount = 1;
+  uint32_t timingQueries = 0;
 
   VkResult createLatencySemaphore() {
     if (createResult == VK_SUCCESS)
@@ -88,6 +99,15 @@ struct Presenter {
     return createResult;
   }
   void latencySleep();
+  PresenterLatencyInfo queryLatencyStats();
+  uint32_t getLatencyTimings(uint32_t count, VkLatencyTimingsFrameReportNV* output) {
+    check(count == 1, "HUD requested more than one report");
+    check(output->sType == VK_STRUCTURE_TYPE_LATENCY_TIMINGS_FRAME_REPORT_NV,
+      "HUD report structure type is missing");
+    timingQueries++;
+    *output = report;
+    return timingCount;
+  }
 };
 
 #include "reports.h"
@@ -203,13 +223,59 @@ static void reportTests() {
   check(results.frameReports[6].gpuFrameTimeUs == 0, "missing prior end timestamp became a frame interval");
 }
 
+static void statsTests() {
+  Presenter p;
+  p.m_latencySleepCounter = 5;
+  p.m_latencySleepDurationUs = 2500;
+  p.m_device->value.nvLowLatency2 = false;
+  auto stats = p.queryLatencyStats();
+  check(!stats.frameLatencyUs && !stats.sleepCount && !stats.sleepDurationUs,
+    "unsupported HUD query returned statistics");
+  check(!p.timingQueries, "unsupported HUD query called Vulkan");
+  p.m_device->value.nvLowLatency2 = true;
+
+  struct StatsCase {
+    uint64_t input, simulation, end;
+    uint32_t available;
+    uint64_t expected;
+    const char* message;
+  };
+  const StatsCase cases[] = {
+    { 0, 1000, 2000, 1, 1000, "simulation timestamp was not used" },
+    { 500, 1000, 2000, 1, 1500, "input timestamp did not take precedence" },
+    { 500, 0, 2000, 1, 1500, "input timestamp required a simulation timestamp" },
+    { 0, 1000, 0, 1, 0, "missing GPU end timestamp wrapped" },
+    { 500, 1000, 0, 1, 0, "missing GPU end with input timestamp wrapped" },
+    { 0, 0, 1000000000, 1, 0, "missing frame start became an uptime duration" },
+    { 0, 2000, 1000, 1, 0, "backwards simulation duration wrapped" },
+    { 3000, 1000, 2000, 1, 0, "backwards input duration fell back to simulation" },
+    { 0, 1000, 1000, 1, 0, "equal timestamps did not yield zero" },
+    { 0, 1000, 2000, 0, 0, "unavailable report supplied a latency" },
+    { 0, 0, 0, 1, 0, "empty report supplied a latency" },
+  };
+  for (const auto& test : cases) {
+    p.report.inputSampleTimeUs = test.input;
+    p.report.simStartTimeUs = test.simulation;
+    p.report.gpuRenderEndTimeUs = test.end;
+    p.timingCount = test.available;
+    auto stats = p.queryLatencyStats();
+    check(stats.frameLatencyUs == test.expected, test.message);
+    check(stats.sleepCount == 5 && stats.sleepDurationUs == 2500,
+      "report validity changed accumulated sleep statistics");
+  }
+  check(p.m_vkd->requests.empty() && p.m_vkd->waits.empty(),
+    "HUD query submitted a sleep or semaphore wait");
+}
+
+
 }
 
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
   std::string selection = argv[1];
-  if (selection != "sleep" && selection != "reports" && selection != "all") return 2;
-  if (selection != "reports") dxvk::sleepTests();
-  if (selection != "sleep") dxvk::reportTests();
+  if (selection != "sleep" && selection != "reports" && selection != "stats" && selection != "all") return 2;
+  if (selection == "sleep" || selection == "all") dxvk::sleepTests();
+  if (selection == "reports" || selection == "all") dxvk::reportTests();
+  if (selection == "stats" || selection == "all") dxvk::statsTests();
   std::cout << "Reflex integration: " << dxvk::checks << " checks passed\n";
 }
