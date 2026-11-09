@@ -1333,7 +1333,10 @@ namespace dxvk::hud {
     HudLatencyItem();
     ~HudLatencyItem();
 
+    using HudItem::update;
+
     void update(
+            Presenter&                              presenter,
             dxvk::high_resolution_clock::time_point time);
 
     HudPos render(

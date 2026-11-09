@@ -23,7 +23,7 @@ namespace dxvk::hud {
     m_hudItems.addCpuTelemetryItems(device->adapter());
     m_hudItems.addGpuTelemetryItems(device->adapter());
     m_hudItems.addFpsItems();
-    addItem<HudLatencyItem>("latency", -1);
+    m_latencyItem = addItem<HudLatencyItem>("latency", -1);
     addItem<HudFpsLowItem>("fps_lows", -1, m_hudItems.fpsLowsWindowNs());
     addItem<HudFrameTimeItem>("frametimes", -1, device, &m_renderer);
     addItem<HudSubmissionStatsItem>("submissions", -1, device);
@@ -83,6 +83,9 @@ namespace dxvk::hud {
     }
 
     m_hudItems.update(&presenter);
+
+    if (m_latencyItem)
+      m_latencyItem->update(presenter, now);
   }
 
 

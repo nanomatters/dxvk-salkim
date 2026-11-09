@@ -3407,6 +3407,7 @@ namespace dxvk::hud {
 
 
   void HudLatencyItem::update(
+          Presenter&                              presenter,
           dxvk::high_resolution_clock::time_point time) {
     uint64_t ticks = std::chrono::duration_cast<std::chrono::microseconds>(time - m_lastUpdate).count();
 

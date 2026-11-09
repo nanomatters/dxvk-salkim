@@ -92,6 +92,7 @@ namespace dxvk::hud {
     HudItemSet            m_hudItems;
     Rc<HudSystemInfoItem> m_systemInfo;
     Rc<HudPresentModeItem> m_presentMode;
+    Rc<HudLatencyItem>     m_latencyItem;
     Rc<Presenter>         m_presenter;
     Rc<HudPresentTelemetryData> m_presentTelemetry;
     dxvk::high_resolution_clock::time_point m_nextPresentationUpdate;
