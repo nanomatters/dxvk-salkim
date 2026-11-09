@@ -59,7 +59,7 @@ def main():
     if not snapshot:
         raise RuntimeError("Production frame snapshot not found")
     snapshot = """void Presenter::snapshotFrame(uint64_t frameId,
-        const Rc<DxvkLatencyTracker>& tracker, VkResult status, uint64_t targetTimeHost,
+        [[maybe_unused]] const Rc<DxvkLatencyTracker>& tracker, VkResult status, uint64_t targetTimeHost,
         const VkPresentTimingInfoEXT& timingInfo) {
       PresenterTimingFeedback frameTargetTime = { frameId, timingInfo.targetTime, targetTimeHost };
       uint64_t frameIntervalTicks = m_timingMode.frameIntervalNs;

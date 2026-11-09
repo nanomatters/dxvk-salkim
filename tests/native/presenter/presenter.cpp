@@ -234,10 +234,13 @@ static void timingCases() {
   test.expectedTimed = false;
   timingCase(test);
 
-  timingCase(TimingCase { "absolute timing retains upstream FIFO wait" });
+  test = TimingCase { "absolute timing skips redundant FIFO wait" };
+  test.expectedWaits = 0u;
+  timingCase(test);
   test = TimingCase { "relative timing" };
   test.requestedTime = 1000u;
   test.flags = VK_PRESENT_TIMING_INFO_PRESENT_AT_RELATIVE_TIME_BIT_EXT;
+  test.expectedWaits = 0u;
   test.wait2 = true;
   timingCase(test);
 
@@ -248,16 +251,19 @@ static void timingCases() {
 
   test = TimingCase { "expired host target" };
   test.hostTarget = 500u;
+  test.expectedWaits = 0u;
   test.expectedSleeps = 0u;
   timingCase(test);
 
   test = TimingCase { "host target reached now" };
   test.hostTarget = 1000u;
+  test.expectedWaits = 0u;
   test.expectedSleeps = 0u;
   timingCase(test);
 
   test = TimingCase { "host target at wait limit" };
   test.hostTarget = 500001000u;
+  test.expectedWaits = 0u;
   timingCase(test);
 
   test = TimingCase { "host target exceeds wait limit" };
@@ -273,6 +279,7 @@ static void timingCases() {
 
   test = TimingCase { "suboptimal timed present" };
   test.presentResult = VK_SUBOPTIMAL_KHR;
+  test.expectedWaits = 0u;
   timingCase(test);
 
   test = TimingCase { "no present ID support" };
