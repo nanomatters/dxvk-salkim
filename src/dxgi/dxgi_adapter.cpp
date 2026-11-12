@@ -518,6 +518,22 @@ namespace dxvk {
     else
       desc.AdapterLuid = GetAdapterLUID(m_index);
 
+    if (m_adapter->kmtLocal()) {
+      D3DKMT_QUERY_DEVICE_IDS ids = { };
+      D3DKMT_QUERYADAPTERINFO query = { };
+      query.hAdapter = m_adapter->kmtLocal();
+      query.Type = KMTQAITYPE_PHYSICALADAPTERDEVICEIDS;
+      query.pPrivateDriverData = &ids;
+      query.PrivateDriverDataSize = sizeof(ids);
+
+      if (D3DKMTQueryAdapterInfo(&query) >= 0
+       && ids.DeviceIds.VendorID == desc.VendorId
+       && ids.DeviceIds.DeviceID == desc.DeviceId) {
+        desc.SubSysId = (ids.DeviceIds.SubSystemID << 16) | ids.DeviceIds.SubVendorID;
+        desc.Revision = ids.DeviceIds.RevisionID;
+      }
+    }
+
     return desc;
   }
 
