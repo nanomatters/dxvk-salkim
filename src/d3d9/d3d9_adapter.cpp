@@ -10,6 +10,7 @@
 #include "../util/util_ratio.h"
 #include "../util/util_string.h"
 
+#include <atomic>
 #include <cfloat>
 
 namespace dxvk {
@@ -824,9 +825,9 @@ namespace dxvk {
         return monitor;
     }
 
-    static bool s_errorShown = false;
+    static std::atomic<bool> s_errorShown{false};
 
-    if (!std::exchange(s_errorShown, true))
+    if (!s_errorShown.exchange(true, std::memory_order_relaxed))
       Logger::warn(str::format("D3D9Adapter::GetMonitor: No monitor found for ", m_displayName, ", using default monitor"));
 
     return wsi::getDefaultMonitor();
