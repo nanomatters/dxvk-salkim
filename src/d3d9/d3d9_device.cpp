@@ -1227,7 +1227,7 @@ namespace dxvk {
   HRESULT STDMETHODCALLTYPE D3D9DeviceEx::GetFrontBufferData(UINT iSwapChain, IDirect3DSurface9* pDestSurface) {
     D3D9DeviceLock lock = LockDevice();
 
-    if (unlikely(iSwapChain != 0)) {
+    if (unlikely(iSwapChain != 0 || (m_behaviorFlags & D3DCREATE_ADAPTERGROUP_DEVICE))) {
       D3D9SwapChainEx* swapchain = GetHeadSwapChain(iSwapChain);
 
       if (unlikely(swapchain == nullptr))
