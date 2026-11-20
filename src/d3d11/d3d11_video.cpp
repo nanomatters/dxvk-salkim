@@ -505,69 +505,6 @@ namespace dxvk {
   }
 
 
-  HRESULT STDMETHODCALLTYPE D3D11VideoContext::GetDecoderBuffer(
-          ID3D11VideoDecoder*             pDecoder,
-          D3D11_VIDEO_DECODER_BUFFER_TYPE Type,
-          UINT*                           BufferSize,
-          void**                          ppBuffer) {
-    static bool s_errorShown = false;
-
-    if (!std::exchange(s_errorShown, true))
-      Logger::warn("D3D11VideoContext::GetDecoderBuffer: Stub");
-
-    return E_NOTIMPL;
-  }
-
-
-  HRESULT STDMETHODCALLTYPE D3D11VideoContext::ReleaseDecoderBuffer(
-          ID3D11VideoDecoder*             pDecoder,
-          D3D11_VIDEO_DECODER_BUFFER_TYPE Type) {
-    static bool s_errorShown = false;
-
-    if (!std::exchange(s_errorShown, true))
-      Logger::warn("D3D11VideoContext::ReleaseDecoderBuffer: Stub");
-
-    return E_NOTIMPL;
-  }
-
-  HRESULT STDMETHODCALLTYPE D3D11VideoContext::DecoderBeginFrame(
-          ID3D11VideoDecoder*             pDecoder,
-          ID3D11VideoDecoderOutputView*   pView,
-          UINT                            KeySize,
-    const void*                           pKey) {
-    static bool s_errorShown = false;
-
-    if (!std::exchange(s_errorShown, true))
-      Logger::warn("D3D11VideoContext::DecoderBeginFrame: Stub");
-
-    return E_NOTIMPL;
-  }
-
-
-  HRESULT STDMETHODCALLTYPE D3D11VideoContext::DecoderEndFrame(
-          ID3D11VideoDecoder*             pDecoder) {
-    static bool s_errorShown = false;
-
-    if (!std::exchange(s_errorShown, true))
-      Logger::warn("D3D11VideoContext::DecoderEndFrame: Stub");
-
-    return E_NOTIMPL;
-  }
-
-
-  HRESULT STDMETHODCALLTYPE D3D11VideoContext::SubmitDecoderBuffers(
-          ID3D11VideoDecoder*             pDecoder,
-          UINT                            BufferCount,
-    const D3D11_VIDEO_DECODER_BUFFER_DESC* pBufferDescs) {
-    static bool s_errorShown = false;
-
-    if (!std::exchange(s_errorShown, true))
-      Logger::warn("D3D11VideoContext::SubmitDecoderBuffers: Stub");
-
-    return E_NOTIMPL;
-  }
-
-
   HRESULT STDMETHODCALLTYPE D3D11VideoContext::DecoderExtension(
           ID3D11VideoDecoder*             pDecoder,
     const D3D11_VIDEO_DECODER_EXTENSION*  pExtension) {

@@ -3281,19 +3281,6 @@ namespace dxvk {
   }
 
 
-  HRESULT STDMETHODCALLTYPE D3D11VideoDevice::CreateVideoDecoder(
-    const D3D11_VIDEO_DECODER_DESC*                     pVideoDesc,
-    const D3D11_VIDEO_DECODER_CONFIG*                   pConfig,
-          ID3D11VideoDecoder**                          ppDecoder) {
-    static bool s_errorShown = false;
-
-    if (!std::exchange(s_errorShown, true))
-      Logger::warn("D3D11VideoDevice::CreateVideoDecoder: Stub");
-
-    return E_NOTIMPL;
-  }
-
-
   HRESULT STDMETHODCALLTYPE D3D11VideoDevice::CreateVideoProcessor(
           ID3D11VideoProcessorEnumerator*               pEnum,
           UINT                                          RateConversionIndex,
@@ -3323,19 +3310,6 @@ namespace dxvk {
     const GUID*                                         pKeyExchangeType,
           ID3D11CryptoSession**                         ppCryptoSession) {
     Logger::warn("D3D11VideoDevice::CreateCryptoSession: Stub");
-    return E_NOTIMPL;
-  }
-
-
-  HRESULT STDMETHODCALLTYPE D3D11VideoDevice::CreateVideoDecoderOutputView(
-          ID3D11Resource*                               pResource,
-    const D3D11_VIDEO_DECODER_OUTPUT_VIEW_DESC*         pDesc,
-          ID3D11VideoDecoderOutputView**                ppVDOVView) {
-    static bool s_errorShown = false;
-
-    if (!std::exchange(s_errorShown, true))
-      Logger::warn("D3D11VideoDevice::CreateVideoDecoderOutputView: Stub");
-
     return E_NOTIMPL;
   }
 
@@ -3380,71 +3354,6 @@ namespace dxvk {
       Logger::err(e.message());
       return E_FAIL;
     }
-  }
-
-
-  UINT STDMETHODCALLTYPE D3D11VideoDevice::GetVideoDecoderProfileCount() {
-    static bool s_errorShown = false;
-
-    if (!std::exchange(s_errorShown, true))
-      Logger::warn("D3D11VideoDevice::GetVideoDecoderProfileCount: Stub");
-
-    return 0;
-  }
-
-
-  HRESULT STDMETHODCALLTYPE D3D11VideoDevice::GetVideoDecoderProfile(
-          UINT                                          Index,
-          GUID*                                         pDecoderProfile) {
-    static bool s_errorShown = false;
-
-    if (!std::exchange(s_errorShown, true))
-      Logger::warn("D3D11VideoDevice::GetVideoDecoderProfile: Stub");
-
-    return E_NOTIMPL;
-  }
-
-
-  HRESULT STDMETHODCALLTYPE D3D11VideoDevice::CheckVideoDecoderFormat(
-    const GUID*                                         pDecoderProfile,
-          DXGI_FORMAT                                   Format,
-          BOOL*                                         pSupported) {
-    static bool s_errorShown = false;
-
-    if (!std::exchange(s_errorShown, true))
-      Logger::warn("D3D11VideoDevice::CheckVideoDecoderFormat: Stub");
-
-    return E_NOTIMPL;
-  }
-
-
-  HRESULT STDMETHODCALLTYPE D3D11VideoDevice::GetVideoDecoderConfigCount(
-    const D3D11_VIDEO_DECODER_DESC*                     pDesc,
-          UINT*                                         pCount) {
-    static bool s_errorShown = false;
-
-    if (!std::exchange(s_errorShown, true))
-      Logger::warn("D3D11VideoDevice::GetVideoDecoderConfigCount: Stub");
-
-    if (!pCount)
-      return E_INVALIDARG;
-
-    *pCount = 0;
-
-    return S_OK;
-  }
-
-
-  HRESULT STDMETHODCALLTYPE D3D11VideoDevice::GetVideoDecoderConfig(
-    const D3D11_VIDEO_DECODER_DESC*                     pDesc,
-          UINT                                          Index,
-          D3D11_VIDEO_DECODER_CONFIG*                   pConfig) {
-    static bool s_errorShown = false;
-
-    if (!std::exchange(s_errorShown, true))
-      Logger::warn("D3D11VideoDevice::GetVideoDecoderConfig: Stub");
-
-    return E_NOTIMPL;
   }
 
 
