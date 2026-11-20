@@ -107,3 +107,22 @@ second decoder with a BLA_N_LP in place of the CRA. Both random-access
 pictures have an empty reference set. The final B picture needs both new
 references. The test checks all four NV12 output hashes against software in
 each case, including the IDR submitted before the reference buffer grew.
+
+## AV1
+
+`av1.py` compares Windows FFmpeg's D3D11VA output with software decoding,
+byte for byte. It exercises AV1 Main in NV12 and P010, single-tile and
+multi-tile pictures, and film-grain synthesis. It also checks a stream with
+lookahead and alternate reference frames. The hardware path uses
+`hwdownload` so a software fallback fails the test.
+
+Use host FFmpeg with libaom and an AV1 software decoder. Put the matching
+DXVK DLLs next to the Windows FFmpeg executable, as for HEVC.
+
+```sh
+WINEDLLOVERRIDES='d3d11,dxgi=n' python3 av1.py wine /path/to/ffmpeg.exe
+```
+
+Pass `--depth 8` or `--depth 10` before the Wine command to test one
+output format. D3D11 uses the same AV1 Profile 0 GUID for both, and
+`CheckVideoDecoderFormat` reports the available depths individually.
