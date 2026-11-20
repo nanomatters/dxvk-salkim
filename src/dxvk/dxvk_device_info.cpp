@@ -74,6 +74,7 @@ namespace dxvk {
     HANDLE_EXT(khrVideoQueue);                     \
     HANDLE_EXT(khrVideoDecodeQueue);               \
     HANDLE_EXT(khrVideoDecodeH264);                \
+    HANDLE_EXT(khrVideoDecodeAv1);                 \
     HANDLE_EXT(khrVideoDecodeH265);                \
     HANDLE_EXT(khrWin32KeyedMutex);                \
     HANDLE_EXT(amdBufferMarker);                   \
@@ -128,7 +129,7 @@ namespace dxvk {
     const bool queryVideo = enableVideoDecode && !deviceInfo && !safeMode
       && m_featuresSupported.khrVideoQueue
       && m_featuresSupported.khrVideoDecodeQueue
-      && (m_featuresSupported.khrVideoDecodeH264 || m_featuresSupported.khrVideoDecodeH265)
+      && (m_featuresSupported.khrVideoDecodeH264 || m_featuresSupported.khrVideoDecodeH265 || m_featuresSupported.khrVideoDecodeAv1)
       && vk->vkGetPhysicalDeviceVideoCapabilitiesKHR
       && vk->vkGetPhysicalDeviceVideoFormatPropertiesKHR;
 
@@ -139,7 +140,9 @@ namespace dxvk {
 
     m_featuresSupported.khrVideoDecodeH264 = m_queueMapping.videoDecode.family != VK_QUEUE_FAMILY_IGNORED;
     m_featuresSupported.khrVideoDecodeH265 = m_queueMapping.hevcDecode.family != VK_QUEUE_FAMILY_IGNORED;
-    m_featuresSupported.khrVideoQueue = m_featuresSupported.khrVideoDecodeH264 || m_featuresSupported.khrVideoDecodeH265;
+    m_featuresSupported.khrVideoDecodeAv1 = m_queueMapping.av1Decode.family != VK_QUEUE_FAMILY_IGNORED;
+    m_featuresSupported.khrVideoQueue = m_featuresSupported.khrVideoDecodeH264
+      || m_featuresSupported.khrVideoDecodeH265 || m_featuresSupported.khrVideoDecodeAv1;
     m_featuresSupported.khrVideoDecodeQueue = m_featuresSupported.khrVideoQueue;
 
     initMemoryProperties(instance, adapter);
@@ -259,6 +262,9 @@ namespace dxvk {
     logDecodeProfile("H.264 High progressive NV12", m_queueMapping.videoDecode, m_properties.h264Decode);
     logDecodeProfile("HEVC Main NV12", m_queueMapping.hevcDecode, m_properties.hevcDecode[0]);
     logDecodeProfile("HEVC Main 10 P010", m_queueMapping.hevcDecode, m_properties.hevcDecode[1]);
+
+    logDecodeProfile("AV1 Main NV12", m_queueMapping.av1Decode, m_properties.av1Decode[0]);
+    logDecodeProfile("AV1 Main P010", m_queueMapping.av1Decode, m_properties.av1Decode[1]);
 
     // Log memory type and heap properties
     static const std::array<std::pair<VkMemoryPropertyFlagBits, const char*>, 8> s_flags = {{
@@ -643,19 +649,41 @@ namespace dxvk {
 
     profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H265_BIT_KHR;
     family = findDecodeQueue(profile.videoCodecOperation);
-    if (!m_featuresSupported.khrVideoDecodeH265 || family == VK_QUEUE_FAMILY_IGNORED)
+    if (m_featuresSupported.khrVideoDecodeH265 && family != VK_QUEUE_FAMILY_IGNORED) {
+      for (uint32_t i = 0; i < m_properties.hevcDecode.size(); i++) {
+        VkVideoDecodeH265ProfileInfoKHR hevc = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H265_PROFILE_INFO_KHR };
+        hevc.stdProfileIdc = i ? STD_VIDEO_H265_PROFILE_IDC_MAIN_10 : STD_VIDEO_H265_PROFILE_IDC_MAIN;
+        profile.pNext = &hevc;
+        profile.lumaBitDepth = profile.chromaBitDepth = i ? VK_VIDEO_COMPONENT_BIT_DEPTH_10_BIT_KHR : VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+        VkFormat format = i ? VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16 : VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+        VkVideoDecodeH265CapabilitiesKHR caps = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H265_CAPABILITIES_KHR };
+        if (queryDecodeProfile(instance, adapter, profile, format, DxvkH265DecodeInfo::HeaderVersion, &caps, m_properties.hevcDecode[i])) {
+          m_properties.hevcDecode[i].maxLevelIdc = caps.maxLevelIdc;
+          m_queueMapping.hevcDecode.family = family;
+        }
+      }
+    }
+
+    profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_AV1_BIT_KHR;
+    family = findDecodeQueue(profile.videoCodecOperation);
+    if (!m_featuresSupported.khrVideoDecodeAv1 || family == VK_QUEUE_FAMILY_IGNORED)
       return;
 
-    for (uint32_t i = 0; i < m_properties.hevcDecode.size(); i++) {
-      VkVideoDecodeH265ProfileInfoKHR hevc = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H265_PROFILE_INFO_KHR };
-      hevc.stdProfileIdc = i ? STD_VIDEO_H265_PROFILE_IDC_MAIN_10 : STD_VIDEO_H265_PROFILE_IDC_MAIN;
-      profile.pNext = &hevc;
+    VkVideoDecodeAV1ProfileInfoKHR av1 = { VK_STRUCTURE_TYPE_VIDEO_DECODE_AV1_PROFILE_INFO_KHR };
+    av1.stdProfile = STD_VIDEO_AV1_PROFILE_MAIN;
+    av1.filmGrainSupport = VK_TRUE;
+    profile.pNext = &av1;
+    for (uint32_t i = 0; i < m_properties.av1Decode.size(); i++) {
       profile.lumaBitDepth = profile.chromaBitDepth = i ? VK_VIDEO_COMPONENT_BIT_DEPTH_10_BIT_KHR : VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
       VkFormat format = i ? VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16 : VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
-      VkVideoDecodeH265CapabilitiesKHR caps = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H265_CAPABILITIES_KHR };
-      if (queryDecodeProfile(instance, adapter, profile, format, DxvkH265DecodeInfo::HeaderVersion, &caps, m_properties.hevcDecode[i])) {
-        m_properties.hevcDecode[i].maxLevelIdc = caps.maxLevelIdc;
-        m_queueMapping.hevcDecode.family = family;
+      VkVideoDecodeAV1CapabilitiesKHR caps = { VK_STRUCTURE_TYPE_VIDEO_DECODE_AV1_CAPABILITIES_KHR };
+      DxvkAv1DecodeInfo result = { };
+      if (queryDecodeProfile(instance, adapter, profile, format, DxvkAv1DecodeInfo::HeaderVersion, &caps, result)
+       && result.capabilities.maxDpbSlots >= STD_VIDEO_AV1_NUM_REF_FRAMES + 1
+       && result.capabilities.maxActiveReferencePictures >= VK_MAX_VIDEO_AV1_REFERENCES_PER_FRAME_KHR) {
+        result.maxLevel = caps.maxLevel;
+        m_properties.av1Decode[i] = result;
+        m_queueMapping.av1Decode.family = family;
       }
     }
   }
@@ -914,6 +942,7 @@ namespace dxvk {
     enableQueue(m_queueMapping.sparse);
     enableQueue(m_queueMapping.videoDecode);
     enableQueue(m_queueMapping.hevcDecode);
+    enableQueue(m_queueMapping.av1Decode);
 
     // Fix up queue priority pointers
     uint32_t maxQueueCount = 0u;
@@ -1298,6 +1327,7 @@ namespace dxvk {
       ENABLE_EXT(khrVideoDecodeQueue, false),
       ENABLE_EXT(khrVideoDecodeH264, false),
       ENABLE_EXT(khrVideoDecodeH265, false),
+      ENABLE_EXT(khrVideoDecodeAv1, false),
 
       /* Keyed mutex support in wine */
       ENABLE_EXT(khrWin32KeyedMutex, false),

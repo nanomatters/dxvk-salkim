@@ -10,6 +10,7 @@
 
 #include "d3d11_context_imm.h"
 #include "d3d11_video.h"
+#include "d3d11_video_av1.h"
 #include "d3d11_video_h264.h"
 #include "d3d11_video_hevc.h"
 
@@ -26,6 +27,7 @@ namespace dxvk {
       UINT rawBitstream;
     };
 
+    constexpr GUID Av1Profile0 = { 0xb8be4ccb, 0xcf53, 0x46ba, { 0x8d, 0x59, 0xd6, 0xb8, 0xa6, 0xda, 0x5d, 0x2a } };
     constexpr DecoderProfile profiles[] = {
       { { 0x1b81be68, 0xa0c7, 0x11d3, { 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5 } },
         DxvkVideoProfile::H264, DXGI_FORMAT_NV12, 2 },
@@ -33,12 +35,43 @@ namespace dxvk {
         DxvkVideoProfile::HevcMain, DXGI_FORMAT_NV12, 1 },
       { { 0x107af0e0, 0xef1a, 0x4d19, { 0xab, 0xa8, 0x67, 0xa1, 0x63, 0x07, 0x3d, 0x13 } },
         DxvkVideoProfile::HevcMain10, DXGI_FORMAT_P010, 1 },
+      { Av1Profile0, DxvkVideoProfile::Av1Main, DXGI_FORMAT_NV12, 1 },
+      { Av1Profile0, DxvkVideoProfile::Av1Main10, DXGI_FORMAT_P010, 1 },
     };
     constexpr GUID NoEncryption = { 0x1b81bed0, 0xa0c7, 0x11d3, { 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5 } };
 
-    const DecoderProfile* findProfile(D3D11Device* device, const GUID& guid) {
+    bool isAv1(DxvkVideoProfile codec) {
+      return codec == DxvkVideoProfile::Av1Main || codec == DxvkVideoProfile::Av1Main10;
+    }
+
+    // AV1 Annex A. Levels that differ only in rate have the same picture limits.
+    bool av1LevelSupports(StdVideoAV1Level maxLevel, VkExtent2D size, uint32_t tileCols = 1, uint32_t tileRows = 1) {
+      static constexpr struct {
+        StdVideoAV1Level level;
+        uint32_t samples, width, height, tiles, columns;
+      } limits[] = {
+        { STD_VIDEO_AV1_LEVEL_2_0,   147456,  2048, 1152,   8,  4 },
+        { STD_VIDEO_AV1_LEVEL_2_1,   278784,  2816, 1584,   8,  4 },
+        { STD_VIDEO_AV1_LEVEL_3_0,   665856,  4352, 2448,  16,  6 },
+        { STD_VIDEO_AV1_LEVEL_3_1,  1065024,  5504, 3096,  16,  6 },
+        { STD_VIDEO_AV1_LEVEL_4_0,  2359296,  6144, 3456,  32,  8 },
+        { STD_VIDEO_AV1_LEVEL_5_0,  8912896,  8192, 4352,  64,  8 },
+        { STD_VIDEO_AV1_LEVEL_6_0, 35651584, 16384, 8704, 128, 16 },
+      };
+
+      for (const auto& limit : limits) {
+        if (limit.level <= maxLevel && size.width <= limit.width && size.height <= limit.height
+         && uint64_t(size.width) * size.height <= limit.samples && tileCols <= limit.columns
+         && uint64_t(tileRows) * tileCols <= limit.tiles)
+          return true;
+      }
+      return false;
+    }
+
+    const DecoderProfile* findProfile(D3D11Device* device, const GUID& guid, DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN) {
       for (const auto& profile : profiles) {
-        if (profile.guid == guid && DxvkVideoDecoder::supports(device->GetDXVKDevice().ptr(), profile.codec))
+        if (profile.guid == guid && (format == DXGI_FORMAT_UNKNOWN || format == profile.format)
+         && DxvkVideoDecoder::supports(device->GetDXVKDevice().ptr(), profile.codec))
           return &profile;
       }
       return nullptr;
@@ -51,6 +84,15 @@ namespace dxvk {
         return false;
 
       const auto& props = device->GetDXVKDevice()->properties();
+      if (isAv1(profile.codec)) {
+        const auto& av1 = props.av1Decode[profile.codec == DxvkVideoProfile::Av1Main10];
+        const auto& caps = av1.capabilities;
+        extent = { desc.SampleWidth, desc.SampleHeight };
+        return extent.width >= caps.minCodedExtent.width && extent.width <= caps.maxCodedExtent.width
+            && extent.height >= caps.minCodedExtent.height && extent.height <= caps.maxCodedExtent.height
+            && av1LevelSupports(av1.maxLevel, extent);
+      }
+
       const bool h264 = profile.codec == DxvkVideoProfile::H264;
       const auto& hevc = props.hevcDecode[profile.codec == DxvkVideoProfile::HevcMain10];
       const auto& caps = h264 ? props.h264Decode.capabilities : hevc.capabilities;
@@ -77,7 +119,7 @@ namespace dxvk {
     }
 
     const DecoderProfile* findConfig(D3D11Device* device, const D3D11_VIDEO_DECODER_DESC& desc, VkExtent2D& extent) {
-      const auto* profile = findProfile(device, desc.Guid);
+      const auto* profile = findProfile(device, desc.Guid, desc.OutputFormat);
       return profile && getSessionExtent(device, *profile, desc, extent) ? profile : nullptr;
     }
 
@@ -111,7 +153,7 @@ namespace dxvk {
       std::vector<uint8_t> bytes;
     };
 
-    using PictureParameters = std::variant<DxvkH264PictureParameters, DxvkH265PictureParameters>;
+    using PictureParameters = std::variant<DxvkH264PictureParameters, DxvkH265PictureParameters, DxvkAv1PictureParameters>;
 
     // DXVA uses the same offset, size and chopping fields in both short-slice records.
     static_assert(sizeof(DXVA_Slice_HEVC_Short) == sizeof(DXVA_Slice_H264_Short));
@@ -123,6 +165,7 @@ namespace dxvk {
       union {
         DXVA_PicParams_H264 h264;
         DXVA_PicParams_HEVC hevc;
+        DXVA_PicParams_AV1  av1;
       } picture = { };
       union {
         DXVA_Qmatrix_H264 h264;
@@ -133,6 +176,7 @@ namespace dxvk {
       bool                  choppedSlice = false;
       std::vector<uint8_t>  bitstream;
       std::vector<uint32_t> offsets;
+      std::vector<DXVA_Tile_AV1> tiles;
     };
 
     class D3D11VideoDecoderOutputView final : public D3D11DeviceChild<ID3D11VideoDecoderOutputView> {
@@ -245,7 +289,8 @@ namespace dxvk {
 
         const auto& desc = *output->texture()->Desc();
 
-        if (output->profile() != m_desc.Guid || desc.Width < m_desc.SampleWidth || desc.Height < m_desc.SampleHeight)
+        if (output->profile() != m_desc.Guid || desc.Format != m_desc.OutputFormat
+         || desc.Width < m_desc.SampleWidth || desc.Height < m_desc.SampleHeight)
           return E_INVALIDARG;
 
         m_output = output;
@@ -253,7 +298,7 @@ namespace dxvk {
       }
 
       HRESULT acquireBuffer(DecoderBuffer type, UINT* size, void** data) {
-        if (!m_output || type == DecoderBuffer::Count)
+        if (!m_output || uint32_t(type) >= m_buffers.size() || (isAv1(m_profile) && type == DecoderBuffer::Matrix))
           return E_INVALIDARG;
 
         auto& storage = m_buffers[uint32_t(type)];
@@ -275,7 +320,7 @@ namespace dxvk {
       }
 
       HRESULT releaseBuffer(DecoderBuffer type) {
-        if (!m_output || type == DecoderBuffer::Count)
+        if (!m_output || uint32_t(type) >= m_buffers.size())
           return E_INVALIDARG;
 
         auto& storage = m_buffers[uint32_t(type)];
@@ -308,7 +353,21 @@ namespace dxvk {
         if (m_decodeFailed.load(std::memory_order_relaxed))
           return E_FAIL;
 
-        if (!frame.havePicture || frame.choppedSlice || frame.offsets.empty())
+        if (!frame.havePicture)
+          return E_INVALIDARG;
+
+        if (isAv1(m_profile)) {
+          const auto& av1 = frame.picture.av1;
+          const auto& caps = m_parent->GetDXVKDevice()->properties().av1Decode[m_profile == DxvkVideoProfile::Av1Main10];
+          if (!av1LevelSupports(caps.maxLevel, { av1.width, av1.height }, av1.tiles.cols, av1.tiles.rows)
+           || !translateAv1PictureParameters(av1, frame.tiles, m_desc, frame.bitstream,
+                params.emplace<DxvkAv1PictureParameters>(), m_av1References))
+            return E_INVALIDARG;
+          bytes = std::move(frame.bitstream);
+          return S_OK;
+        }
+
+        if (frame.choppedSlice || frame.offsets.empty())
           return E_INVALIDARG;
 
         // The Vulkan decoder backends expect a three-byte Annex B prefix.
@@ -362,8 +421,13 @@ namespace dxvk {
 
         try {
           auto frame = std::visit([&] (const auto& picture) { return m_backend->decode(picture, bytes); }, params);
-          if (frame.image)
-            ctx->copyVideoFrame(frame, image, layer, { m_desc.SampleWidth, m_desc.SampleHeight });
+          if (frame.image) {
+            VkExtent2D extent = { m_desc.SampleWidth, m_desc.SampleHeight };
+            // AV1 can change picture size within a decoder. Copy complete chroma samples.
+            if (const auto* av1 = std::get_if<DxvkAv1PictureParameters>(&params))
+              extent = { align(av1->extent.width, 2u), align(av1->extent.height, 2u) };
+            ctx->copyVideoFrame(frame, image, layer, extent);
+          }
         } catch (const DxvkError& error) {
           m_decodeFailed.store(true, std::memory_order_relaxed);
           Logger::err(error.message());
@@ -378,10 +442,15 @@ namespace dxvk {
         const size_t pixels = size_t(m_extent.width) * m_extent.height;
 
         switch (type) {
-          case DecoderBuffer::Picture:   return m_profile == DxvkVideoProfile::H264 ? sizeof(DXVA_PicParams_H264) : sizeof(DXVA_PicParams_HEVC);
+          case DecoderBuffer::Picture:
+            if (isAv1(m_profile))
+              return sizeof(DXVA_PicParams_AV1);
+            return m_profile == DxvkVideoProfile::H264 ? sizeof(DXVA_PicParams_H264) : sizeof(DXVA_PicParams_HEVC);
           case DecoderBuffer::Matrix:    return m_profile == DxvkVideoProfile::H264 ? sizeof(DXVA_Qmatrix_H264) : sizeof(DXVA_Qmatrix_HEVC);
-          case DecoderBuffer::Slice:     return (pixels / 256u) * sizeof(DXVA_Slice_H264_Short);
-          case DecoderBuffer::Bitstream: return std::max<size_t>(1u << 20, m_profile == DxvkVideoProfile::HevcMain10 ? 3u * pixels : pixels + pixels / 2u);
+          case DecoderBuffer::Slice:
+            return isAv1(m_profile) ? 64u * 64u * sizeof(DXVA_Tile_AV1) : (pixels / 256u) * sizeof(DXVA_Slice_H264_Short);
+          case DecoderBuffer::Bitstream:
+            return std::max<size_t>(1u << 20, m_desc.OutputFormat == DXGI_FORMAT_P010 ? 3u * pixels : pixels + pixels / 2u);
           default:                       return 0u;
         }
       }
@@ -394,6 +463,7 @@ namespace dxvk {
       Com<D3D11VideoDecoderOutputView>     m_output;
       DecoderFrameData                    m_frame;
       uint8_t                             m_hevcMaxTemporalId = 0;
+      std::vector<D3D11Av1Reference>      m_av1References;
       std::array<DecoderBufferStorage, uint32_t(DecoderBuffer::Count)> m_buffers;
       std::atomic<bool>                   m_decodeFailed = { false };
       D3DDestructionNotifier              m_destructionNotifier;
@@ -434,15 +504,60 @@ namespace dxvk {
       const auto slices = data[uint32_t(DecoderBuffer::Slice)];
       const auto bitstream = data[uint32_t(DecoderBuffer::Bitstream)];
 
+      const bool av1 = isAv1(m_profile);
+      const size_t recordSize = av1 ? sizeof(DXVA_Tile_AV1) : sizeof(DXVA_Slice_H264_Short);
       if ((picture.size && (m_frame.havePicture || picture.size != getBufferSize(DecoderBuffer::Picture)))
-       || (matrix.size && (m_frame.haveMatrix || matrix.size != getBufferSize(DecoderBuffer::Matrix)))
-       || !!slices.size != !!bitstream.size || slices.size % sizeof(DXVA_Slice_H264_Short))
+       || (matrix.size && (av1 || m_frame.haveMatrix || matrix.size != getBufferSize(DecoderBuffer::Matrix)))
+       || !!slices.size != !!bitstream.size || slices.size % recordSize)
         return E_INVALIDARG;
 
       bool choppedSlice = m_frame.choppedSlice;
       size_t byteCount = m_frame.bitstream.size();
       size_t sliceCount = m_frame.offsets.size();
       size_t previousEnd = 0u;
+
+      if (av1) {
+        const size_t tileCount = slices.size / recordSize;
+        if (tileCount + m_frame.tiles.size() > 64u * 64u
+         || bitstream.size > std::numeric_limits<uint32_t>::max() - byteCount)
+          return E_INVALIDARG;
+
+        // DXVA offsets are relative to this submitted bitstream buffer.
+        // Keep the buffer intact when applications submit several tile groups.
+        for (size_t i = 0; i < tileCount; i++) {
+          DXVA_Tile_AV1 tile;
+          std::memcpy(&tile, slices.bytes + i * recordSize, sizeof(tile));
+          if (!tile.DataSize || tile.DataOffset < previousEnd || tile.DataOffset > bitstream.size
+           || tile.DataSize > bitstream.size - tile.DataOffset)
+            return E_INVALIDARG;
+          previousEnd = size_t(tile.DataOffset) + tile.DataSize;
+        }
+
+        try {
+          m_frame.tiles.reserve(m_frame.tiles.size() + tileCount);
+          m_frame.bitstream.reserve(byteCount + bitstream.size);
+        } catch (const std::bad_alloc&) {
+          return E_OUTOFMEMORY;
+        } catch (const std::length_error&) {
+          return E_OUTOFMEMORY;
+        }
+
+        if (picture.size) {
+          std::memcpy(&m_frame.picture.av1, picture.bytes, picture.size);
+          m_frame.havePicture = true;
+        }
+        for (size_t i = 0; i < tileCount; i++) {
+          DXVA_Tile_AV1 tile;
+          std::memcpy(&tile, slices.bytes + i * recordSize, sizeof(tile));
+          tile.DataOffset += uint32_t(byteCount);
+          m_frame.tiles.push_back(tile);
+        }
+        if (bitstream.size)
+          m_frame.bitstream.insert(m_frame.bitstream.end(), bitstream.bytes, bitstream.bytes + bitstream.size);
+        for (UINT i = 0; i < count; i++)
+          m_buffers[uint32_t(getDecoderBuffer(buffers[i].BufferType))].state = DecoderBufferStorage::State::Available;
+        return S_OK;
+      }
 
       // Validate the entire batch before updating the active frame.
       for (size_t offset = 0; offset < slices.size; offset += sizeof(DXVA_Slice_H264_Short)) {
@@ -547,8 +662,7 @@ namespace dxvk {
           ID3D11VideoDecoderOutputView**        view) {
     InitReturnPtr(view);
 
-    const auto* profile = desc ? findProfile(m_device, desc->DecodeProfile) : nullptr;
-    if (!profile || desc->ViewDimension != D3D11_VDOV_DIMENSION_TEXTURE2D
+    if (!desc || desc->ViewDimension != D3D11_VDOV_DIMENSION_TEXTURE2D
      || !belongsToDevice(resource, m_device))
       return E_INVALIDARG;
 
@@ -561,7 +675,7 @@ namespace dxvk {
     auto texture = GetCommonTexture(resource);
     const auto& textureDesc = *texture->Desc();
 
-    if (textureDesc.Format != profile->format || textureDesc.MipLevels != 1
+    if (!findProfile(m_device, desc->DecodeProfile, textureDesc.Format) || textureDesc.MipLevels != 1
      || textureDesc.SampleDesc.Count != 1 || textureDesc.Usage != D3D11_USAGE_DEFAULT
      || !(textureDesc.BindFlags & D3D11_BIND_DECODER)
      || desc->Texture2D.ArraySlice >= textureDesc.ArraySize)
@@ -581,7 +695,7 @@ namespace dxvk {
 
   UINT STDMETHODCALLTYPE D3D11VideoDevice::GetVideoDecoderProfileCount() {
     return std::count_if(std::begin(profiles), std::end(profiles), [&] (const DecoderProfile& profile) {
-      return DxvkVideoDecoder::supports(m_device->GetDXVKDevice().ptr(), profile.codec);
+      return findProfile(m_device, profile.guid) == &profile;
     });
   }
 
@@ -593,7 +707,7 @@ namespace dxvk {
       return E_INVALIDARG;
 
     for (const auto& entry : profiles) {
-      if (DxvkVideoDecoder::supports(m_device->GetDXVKDevice().ptr(), entry.codec) && !index--) {
+      if (findProfile(m_device, entry.guid) == &entry && !index--) {
         *profile = entry.guid;
         return S_OK;
       }
@@ -615,7 +729,7 @@ namespace dxvk {
     if (!entry)
       return E_INVALIDARG;
 
-    *supported = format == entry->format;
+    *supported = format != DXGI_FORMAT_UNKNOWN && findProfile(m_device, *profile, format);
     return S_OK;
   }
 
@@ -710,7 +824,7 @@ namespace dxvk {
 
     Com<D3D11VideoDecoder, false> videoDecoder = static_cast<D3D11VideoDecoder*>(decoder);
     Com<D3D11VideoDecoderOutputView> output;
-    PictureParameters params;
+    PictureParameters params = { };
     std::vector<uint8_t> bytes;
 
     try {

@@ -10,14 +10,22 @@ namespace dxvk {
 
   namespace {
 
+    bool isAv1(DxvkVideoProfile profile) {
+      return profile == DxvkVideoProfile::Av1Main || profile == DxvkVideoProfile::Av1Main10;
+    }
+
     const DxvkVideoDecodeInfo& getCaps(const DxvkDevice* device, DxvkVideoProfile profile) {
       const auto& props = device->properties();
       if (profile == DxvkVideoProfile::H264)
         return props.h264Decode;
+      if (isAv1(profile))
+        return props.av1Decode[profile == DxvkVideoProfile::Av1Main10];
       return props.hevcDecode[profile == DxvkVideoProfile::HevcMain10];
     }
 
     const DxvkDeviceQueue& getQueue(const DxvkDevice* device, DxvkVideoProfile profile) {
+      if (isAv1(profile))
+        return device->queues().av1Decode;
       return profile == DxvkVideoProfile::H264 ? device->queues().videoDecode : device->queues().hevcDecode;
     }
 
@@ -157,6 +165,7 @@ namespace dxvk {
 
     void setParameters(VkVideoSessionKHR session, const DxvkH264SessionParameters& params);
     void setParameters(VkVideoSessionKHR session, const DxvkH265SessionParameters& params);
+    void setParameters(VkVideoSessionKHR session, const DxvkAv1SessionParameters& params);
     void createParameters(VkVideoSessionKHR session, const void* codecInfo);
     VkDeviceSize uploadBitstream(DxvkDevice* device, const VkVideoProfileListInfoKHR& profiles,
       VkDeviceSize alignment, const std::vector<uint8_t>& bytes);
@@ -193,7 +202,7 @@ namespace dxvk {
     Rc<DxvkImage> image;
     std::unique_ptr<VideoBitstream> bitstream;
     VkVideoSessionParametersKHR parameters = VK_NULL_HANDLE;
-    std::variant<std::monostate, DxvkH264SessionParameters, DxvkH265SessionParameters> cached;
+    std::variant<std::monostate, DxvkH264SessionParameters, DxvkH265SessionParameters, DxvkAv1SessionParameters> cached;
   };
 
 
@@ -260,6 +269,21 @@ namespace dxvk {
     info.maxStdSPSCount = 1;
     info.maxStdPPSCount = 1;
     info.pParametersAddInfo = &add;
+    createParameters(session, &info);
+    cached = params;
+  }
+
+
+  void DxvkVideoDecoder::Submission::setParameters(
+          VkVideoSessionKHR          session,
+    const DxvkAv1SessionParameters&  params) {
+    const auto* prev = std::get_if<DxvkAv1SessionParameters>(&cached);
+    if (prev && !std::memcmp(prev, &params, sizeof(params)))
+      return;
+
+    auto sequence = params.sequenceHeader();
+    VkVideoDecodeAV1SessionParametersCreateInfoKHR info = { VK_STRUCTURE_TYPE_VIDEO_DECODE_AV1_SESSION_PARAMETERS_CREATE_INFO_KHR };
+    info.pStdSequenceHeader = &sequence;
     createParameters(session, &info);
     cached = params;
   }
@@ -386,25 +410,35 @@ namespace dxvk {
      || m_extent.height < capabilities.minCodedExtent.height || m_extent.height > capabilities.maxCodedExtent.height)
       throw DxvkError("DxvkVideoDecoder: Coded extent is outside device limits");
 
-    if (m_codec == DxvkVideoProfile::H264) {
+    const VkExtensionProperties* headerVersion;
+    if (isAv1(m_codec)) {
+      m_av1Profile.stdProfile = STD_VIDEO_AV1_PROFILE_MAIN;
+      m_av1Profile.filmGrainSupport = VK_TRUE;
+      m_profile.pNext = &m_av1Profile;
+      m_profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_AV1_BIT_KHR;
+      headerVersion = &DxvkAv1DecodeInfo::HeaderVersion;
+    } else if (m_codec == DxvkVideoProfile::H264) {
+      headerVersion = &DxvkH264DecodeInfo::HeaderVersion;
       m_h264Profile.stdProfileIdc = STD_VIDEO_H264_PROFILE_IDC_HIGH;
       m_h264Profile.pictureLayout = VK_VIDEO_DECODE_H264_PICTURE_LAYOUT_PROGRESSIVE_KHR;
       m_profile.pNext = &m_h264Profile;
       m_profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR;
     } else {
+      headerVersion = &DxvkH265DecodeInfo::HeaderVersion;
       m_hevcProfile.stdProfileIdc = m_codec == DxvkVideoProfile::HevcMain10
         ? STD_VIDEO_H265_PROFILE_IDC_MAIN_10 : STD_VIDEO_H265_PROFILE_IDC_MAIN;
       m_profile.pNext = &m_hevcProfile;
       m_profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H265_BIT_KHR;
     }
     m_profile.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
-    m_profile.lumaBitDepth = m_codec == DxvkVideoProfile::HevcMain10
+    m_profile.lumaBitDepth = (m_codec == DxvkVideoProfile::HevcMain10 || m_codec == DxvkVideoProfile::Av1Main10)
       ? VK_VIDEO_COMPONENT_BIT_DEPTH_10_BIT_KHR : VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
     m_profile.chromaBitDepth = m_profile.lumaBitDepth;
     m_profiles.profileCount = 1;
     m_profiles.pProfiles = &m_profile;
 
-    m_maxSlots = std::min(capabilities.maxDpbSlots, m_codec == DxvkVideoProfile::H264 ? 17u : 16u);
+    const uint32_t slots = isAv1(m_codec) ? uint32_t(m_av1References.size()) : m_codec == DxvkVideoProfile::H264 ? 17u : 16u;
+    m_maxSlots = std::min(capabilities.maxDpbSlots, slots);
     m_maxReferences = std::min(capabilities.maxActiveReferencePictures, m_maxSlots - 1u);
 
     VkVideoSessionCreateInfoKHR session = { VK_STRUCTURE_TYPE_VIDEO_SESSION_CREATE_INFO_KHR };
@@ -415,7 +449,7 @@ namespace dxvk {
     session.referencePictureFormat = m_caps.referenceFormat.format;
     session.maxDpbSlots = m_maxSlots;
     session.maxActiveReferencePictures = m_maxReferences;
-    session.pStdHeaderVersion = m_codec == DxvkVideoProfile::H264 ? &DxvkH264DecodeInfo::HeaderVersion : &DxvkH265DecodeInfo::HeaderVersion;
+    session.pStdHeaderVersion = headerVersion;
     checkVideo(m_vkd->vkCreateVideoSessionKHR(m_vkd->device(), &session, nullptr, &m_session),
       "vkCreateVideoSessionKHR");
 
@@ -532,6 +566,7 @@ namespace dxvk {
     bool reference;
     const void* codecInfo;
     StdVideoDecodeH265PictureInfo* hevc = nullptr;
+    const std::array<uint8_t, STD_VIDEO_AV1_NUM_REF_FRAMES>* av1ReferenceMap = nullptr;
   };
 
 
@@ -553,7 +588,9 @@ namespace dxvk {
     Picture picture = { extent, params.sps.max_num_ref_frames + 1u,
       bool(params.picture.flags.IdrPicFlag), bool(params.picture.flags.is_intra),
       bool(params.picture.flags.is_reference), &codecInfo };
-    return decodePicture(params, bytes, picture, current);
+    if (params.referenceCount > params.references.size())
+      return dropPicture(params.currentPictureId, picture.reset);
+    return decodePicture(params, bytes, picture, current, params.referenceCount, params.references.data());
   }
 
 
@@ -569,7 +606,7 @@ namespace dxvk {
     VkVideoDecodeH265DpbSlotInfoKHR current = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H265_DPB_SLOT_INFO_KHR };
     current.pStdReferenceInfo = &params.currentReference;
     VkExtent2D extent = { params.sps.pic_width_in_luma_samples, params.sps.pic_height_in_luma_samples };
-    if (m_codec == DxvkVideoProfile::H264
+    if (m_codec == DxvkVideoProfile::H264 || isAv1(m_codec)
      || extent.width > m_extent.width || extent.height > m_extent.height
      || extent.width < m_caps.capabilities.minCodedExtent.width || extent.height < m_caps.capabilities.minCodedExtent.height
      || params.profileTierLevel.general_profile_idc != m_hevcProfile.stdProfileIdc)
@@ -584,27 +621,95 @@ namespace dxvk {
     Picture picture = { extent, params.dpbMgr.max_dec_pic_buffering_minus1[0] + 1u,
       bool(stdPicture.flags.IdrPicFlag) || resized, bool(stdPicture.flags.IrapPicFlag),
       bool(stdPicture.flags.IsReference), &codecInfo, &stdPicture };
-    return decodePicture(params, bytes, picture, current);
+    if (params.referenceCount > params.references.size())
+      return dropPicture(params.currentPictureId, picture.reset);
+    return decodePicture(params, bytes, picture, current, params.referenceCount, params.references.data());
   }
 
 
-  template<typename Parameters, typename SlotInfo>
+  DxvkDecodedFrame DxvkVideoDecoder::decode(
+    const DxvkAv1PictureParameters& params,
+    const std::vector<uint8_t>& bytes) {
+    StdVideoAV1TileInfo tiles;
+    auto stdPicture = params.pictureInfo(tiles);
+    const bool key = stdPicture.frame_type == STD_VIDEO_AV1_FRAME_TYPE_KEY;
+    const bool reset = key && stdPicture.refresh_frame_flags == 0xff;
+    if (!isAv1(m_codec) || params.color.BitDepth != (m_codec == DxvkVideoProfile::Av1Main10 ? 10 : 8)
+     || params.extent.width < m_caps.capabilities.minCodedExtent.width || params.extent.width > m_extent.width
+     || params.extent.height < m_caps.capabilities.minCodedExtent.height || params.extent.height > m_extent.height
+     || params.sliceOffsets.size() != params.tileSizes.size() || params.frameHeaderOffset >= bytes.size())
+      return dropPicture(params.currentPictureId, reset);
+
+    VkVideoDecodeAV1PictureInfoKHR codecInfo = { VK_STRUCTURE_TYPE_VIDEO_DECODE_AV1_PICTURE_INFO_KHR };
+    codecInfo.pStdPictureInfo = &stdPicture;
+    codecInfo.frameHeaderOffset = params.frameHeaderOffset;
+    codecInfo.tileCount = uint32_t(params.sliceOffsets.size());
+    codecInfo.pTileOffsets = params.sliceOffsets.data();
+    codecInfo.pTileSizes = params.tileSizes.data();
+    std::fill_n(codecInfo.referenceNameSlotIndices, VK_MAX_VIDEO_AV1_REFERENCES_PER_FRAME_KHR, -1);
+
+    struct Reference {
+      uint8_t pictureId;
+      StdVideoDecodeAV1ReferenceInfo info;
+    };
+    std::array<Reference, VK_MAX_VIDEO_AV1_REFERENCES_PER_FRAME_KHR> references;
+    uint32_t referenceCount = 0;
+
+    StdVideoDecodeAV1ReferenceInfo currentInfo = { };
+    currentInfo.frame_type = uint8_t(stdPicture.frame_type);
+    currentInfo.OrderHint = stdPicture.OrderHint;
+    currentInfo.flags.disable_frame_end_update_cdf = stdPicture.flags.disable_frame_end_update_cdf;
+    currentInfo.flags.segmentation_enabled = stdPicture.flags.segmentation_enabled;
+    const uint32_t signBit = 1u << params.sequence.order_hint_bits_minus_1;
+    auto relativeDistance = [signBit](uint32_t a, uint32_t b) -> int {
+      const uint32_t diff = a - b;
+      return int(diff & (signBit - 1)) - int(diff & signBit);
+    };
+    for (size_t i = 0; i < params.referenceNames.size(); i++) {
+      const auto id = params.referenceNames[i];
+      if (id == 0xff)
+        continue;
+      auto entry = std::find(m_pictureIds.begin(), m_pictureIds.end(), id);
+      if (reset || entry == m_pictureIds.end() || id == params.currentPictureId)
+        return dropPicture(params.currentPictureId, reset);
+      const uint32_t slot = uint32_t(entry - m_pictureIds.begin());
+      const auto& info = m_av1References[slot];
+      if (std::find(codecInfo.referenceNameSlotIndices, codecInfo.referenceNameSlotIndices + i, int32_t(slot))
+       == codecInfo.referenceNameSlotIndices + i)
+        references[referenceCount++] = { id, info };
+
+      codecInfo.referenceNameSlotIndices[i] = slot;
+      stdPicture.OrderHints[i + 1] = info.OrderHint;
+      currentInfo.SavedOrderHints[i + 1] = info.OrderHint;
+      if (params.sequence.flags.enable_order_hint && relativeDistance(info.OrderHint, currentInfo.OrderHint) > 0)
+        currentInfo.RefFrameSignBias |= 1u << (i + 1);
+    }
+
+    VkVideoDecodeAV1DpbSlotInfoKHR current = { VK_STRUCTURE_TYPE_VIDEO_DECODE_AV1_DPB_SLOT_INFO_KHR };
+    current.pStdReferenceInfo = &currentInfo;
+    Picture picture = { params.extent, uint32_t(m_av1References.size()), reset, key,
+      bool(stdPicture.refresh_frame_flags), &codecInfo, nullptr, &params.referenceMap };
+    return decodePicture(params, bytes, picture, current, referenceCount, references.data());
+  }
+
+
+  template<typename Parameters, typename SlotInfo, typename Reference>
   DxvkDecodedFrame DxvkVideoDecoder::decodePicture(
     const Parameters& params, const std::vector<uint8_t>& bytes,
-    const Picture& picture, const SlotInfo& currentInfo) {
+    const Picture& picture, const SlotInfo& currentInfo, uint32_t referenceCount, const Reference* sourceReferences) {
     const bool reset = !m_initialized || picture.reset;
     if (bytes.empty() || params.sliceOffsets.empty()
-     || params.referenceCount > m_maxReferences || params.referenceCount > params.references.size()
-     || (!m_initialized && !picture.intra) || (params.referenceCount && reset))
+     || referenceCount > m_maxReferences
+     || (!m_initialized && !picture.intra) || (referenceCount && reset))
       return dropPicture(params.currentPictureId, picture.reset);
 
     // A same-size HEVC random access picture with no surviving references
     // can replace the DPB without resetting the video session.
     const uint32_t allocatedSlots = uint32_t(m_pictureIds.size());
     const uint32_t requiredSlots = std::min(m_maxSlots, picture.requiredSlots);
-    const bool canGrow = reset || (picture.hevc && picture.intra && !params.referenceCount);
+    const bool canGrow = reset || (picture.hevc && picture.intra && !referenceCount);
     const uint32_t slotCount = canGrow ? std::max(allocatedSlots, requiredSlots) : allocatedSlots;
-    if (params.referenceCount >= slotCount)
+    if (referenceCount >= slotCount)
       return dropPicture(params.currentPictureId, picture.reset);
 
     const bool replaceDpb = slotCount > allocatedSlots;
@@ -622,8 +727,8 @@ namespace dxvk {
     pictureResource.codedExtent = picture.extent;
     pictureResource.imageViewBinding = dpb->m_view;
 
-    for (uint32_t i = 0; i < params.referenceCount; i++) {
-      const auto& reference = params.references[i];
+    for (uint32_t i = 0; i < referenceCount; i++) {
+      const auto& reference = sourceReferences[i];
       auto entry = std::find(pictureIds.begin(), pictureIds.end(), reference.pictureId);
 
       if (entry == pictureIds.end() || reference.pictureId == params.currentPictureId)
@@ -636,6 +741,8 @@ namespace dxvk {
       used[slot] = true;
       referencePictures[i] = pictureResource;
       referencePictures[i].baseArrayLayer = slot;
+      if constexpr (std::is_same_v<SlotInfo, VkVideoDecodeAV1DpbSlotInfoKHR>)
+        referencePictures[i].codedExtent = m_av1ReferenceExtents[slot];
       referenceInfo[i] = { currentInfo.sType, nullptr, &reference.info };
       references[i] = { VK_STRUCTURE_TYPE_VIDEO_REFERENCE_SLOT_INFO_KHR, &referenceInfo[i],
         int32_t(slot), &referencePictures[i] };
@@ -648,7 +755,7 @@ namespace dxvk {
         for (auto& index : set) {
           if (index == STD_VIDEO_H265_NO_REFERENCE_PICTURE)
             continue;
-          if (index >= params.referenceCount)
+          if (index >= referenceCount)
             return false;
           index = uint8_t(references[index].slotIndex);
         }
@@ -657,6 +764,18 @@ namespace dxvk {
       if (!mapSet(picture.hevc->RefPicSetStCurrBefore) || !mapSet(picture.hevc->RefPicSetStCurrAfter)
        || !mapSet(picture.hevc->RefPicSetLtCurr))
         return dropPicture(params.currentPictureId, picture.reset);
+    }
+
+    // AV1's map can retain a frame even when none of this picture's seven
+    // reference names uses it. Keep its slot for subsequent pictures.
+    if (picture.av1ReferenceMap && !reset) {
+      for (auto id : *picture.av1ReferenceMap) {
+        if (id == 0xff)
+          continue;
+        auto entry = std::find(pictureIds.begin(), pictureIds.end(), id);
+        if (entry != pictureIds.end())
+          used[entry - pictureIds.begin()] = true;
+      }
     }
 
     uint32_t currentSlot = slotCount;
@@ -674,8 +793,8 @@ namespace dxvk {
       return dropPicture(params.currentPictureId, picture.reset);
 
     std::array<VkVideoReferenceSlotInfoKHR, 18> bound = { };
-    std::copy_n(references.begin(), params.referenceCount, bound.begin());
-    uint32_t boundCount = params.referenceCount;
+    std::copy_n(references.begin(), referenceCount, bound.begin());
+    uint32_t boundCount = referenceCount;
 
     if (replaceDpb && !reset) {
       for (uint32_t i = 0; i < allocatedSlots; i++) {
@@ -728,7 +847,7 @@ namespace dxvk {
     decode.dstPictureResource = { VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR, nullptr,
       { 0, 0 }, picture.extent, 0, slot.output->m_view };
     decode.pSetupReferenceSlot = &current;
-    decode.referenceSlotCount = params.referenceCount;
+    decode.referenceSlotCount = referenceCount;
     decode.pReferenceSlots = references.data();
 
     checkVideo(m_vkd->vkResetCommandBuffer(slot.cmd, 0), "vkResetCommandBuffer");
@@ -795,6 +914,10 @@ namespace dxvk {
     slot.pending = true;
     slot.dpb = dpb;
 
+    if constexpr (std::is_same_v<SlotInfo, VkVideoDecodeAV1DpbSlotInfoKHR>) {
+      m_av1References[currentSlot] = *currentInfo.pStdReferenceInfo;
+      m_av1ReferenceExtents[currentSlot] = picture.extent;
+    }
     pictureIds[currentSlot] = picture.reference ? int32_t(params.currentPictureId) : EmptyPictureSlot;
     m_dpb = std::move(dpb);
     m_dpbExtent = picture.extent;

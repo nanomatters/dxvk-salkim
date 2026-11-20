@@ -70,6 +70,7 @@ namespace dxvk {
     DxvkDeviceQueue sparse;
     DxvkDeviceQueue videoDecode;
     DxvkDeviceQueue hevcDecode;
+    DxvkDeviceQueue av1Decode;
   };
   
   /**

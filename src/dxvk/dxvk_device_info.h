@@ -35,6 +35,14 @@ namespace dxvk {
     StdVideoH265LevelIdc maxLevelIdc = STD_VIDEO_H265_LEVEL_IDC_INVALID;
   };
 
+  struct DxvkAv1DecodeInfo : DxvkVideoDecodeInfo {
+    static constexpr VkExtensionProperties HeaderVersion = {
+      VK_STD_VULKAN_VIDEO_CODEC_AV1_DECODE_EXTENSION_NAME,
+      VK_STD_VULKAN_VIDEO_CODEC_AV1_DECODE_API_VERSION_1_0_0,
+    };
+    StdVideoAV1Level maxLevel = STD_VIDEO_AV1_LEVEL_INVALID;
+  };
+
   /**
    * \brief Device info
    * 
@@ -47,6 +55,7 @@ namespace dxvk {
     Version                                                   driverVersion = { };
     DxvkH264DecodeInfo                                        h264Decode = { };
     std::array<DxvkH265DecodeInfo, 2>                         hevcDecode = { };
+    std::array<DxvkAv1DecodeInfo, 2>                          av1Decode = { };
     VkPhysicalDeviceProperties2                               core                            = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
     VkPhysicalDeviceVulkan11Properties                        vk11                            = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES };
     VkPhysicalDeviceVulkan12Properties                        vk12                            = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES };
@@ -141,6 +150,7 @@ namespace dxvk {
     VkBool32                                                  khrVideoQueue                   = VK_FALSE;
     VkBool32                                                  khrVideoDecodeQueue             = VK_FALSE;
     VkBool32                                                  khrVideoDecodeH264              = VK_FALSE;
+    VkBool32                                                  khrVideoDecodeAv1               = VK_FALSE;
     VkBool32                                                  khrVideoDecodeH265              = VK_FALSE;
     VkBool32                                                  khrSwapchainMutableFormat       = VK_FALSE;
     VkBool32                                                  khrWin32KeyedMutex              = VK_FALSE;
@@ -226,6 +236,7 @@ namespace dxvk {
     VkExtensionProperties khrVideoQueue                     = vk::makeExtension(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
     VkExtensionProperties khrVideoDecodeQueue               = vk::makeExtension(VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME);
     VkExtensionProperties khrVideoDecodeH264                = vk::makeExtension(VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME);
+    VkExtensionProperties khrVideoDecodeAv1                 = vk::makeExtension(VK_KHR_VIDEO_DECODE_AV1_EXTENSION_NAME);
     VkExtensionProperties khrVideoDecodeH265                = vk::makeExtension(VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME);
     VkExtensionProperties khrWin32KeyedMutex                = vk::makeExtension(VK_KHR_WIN32_KEYED_MUTEX_EXTENSION_NAME);
     VkExtensionProperties amdBufferMarker                   = vk::makeExtension(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
@@ -268,6 +279,7 @@ namespace dxvk {
     DxvkDeviceQueueIndex sparse;
     DxvkDeviceQueueIndex videoDecode;
     DxvkDeviceQueueIndex hevcDecode;
+    DxvkDeviceQueueIndex av1Decode;
   };
 
 
