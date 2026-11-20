@@ -686,6 +686,14 @@ namespace dxvk {
      */
     void setSubmissionTimeout(uint64_t timeout);
 
+    /** Submit independent video work under the device's queue lock. */
+    VkResult submitVideoDecode(const VkSubmitInfo2& submit, VkFence fence) {
+      m_submissionQueue.lockDeviceQueue();
+      VkResult status = m_vkd->vkQueueSubmit2(m_queues.videoDecode.queueHandle, 1, &submit, fence);
+      m_submissionQueue.unlockDeviceQueue();
+      return status;
+    }
+
     /**
      * \brief Locks submission queue
      * 

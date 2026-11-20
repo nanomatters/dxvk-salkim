@@ -13,6 +13,8 @@
 
 namespace dxvk {
 
+  struct DxvkH264DecodedFrame;
+
   /**
    * \brief DXVK context
    * 
@@ -542,6 +544,13 @@ namespace dxvk {
             VkOffset3D            srcOffset,
             VkExtent3D            extent);
     
+    /** Copies the decoded NV12 planes into the application's output view. */
+    void copyH264Frame(
+      const DxvkH264DecodedFrame& frame,
+      const Rc<DxvkImage>&        dstImage,
+            uint32_t              dstLayer,
+            VkExtent2D            extent);
+
     /**
      * \brief Copies overlapping image region
      *

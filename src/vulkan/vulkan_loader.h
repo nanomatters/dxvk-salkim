@@ -223,6 +223,18 @@ namespace dxvk::vk {
     VULKAN_FN(vkResetFences);
     VULKAN_FN(vkGetFenceStatus);
     VULKAN_FN(vkWaitForFences);
+
+    VULKAN_FN(vkCreateVideoSessionKHR);
+    VULKAN_FN(vkDestroyVideoSessionKHR);
+    VULKAN_FN(vkGetVideoSessionMemoryRequirementsKHR);
+    VULKAN_FN(vkBindVideoSessionMemoryKHR);
+    VULKAN_FN(vkCreateVideoSessionParametersKHR);
+    VULKAN_FN(vkDestroyVideoSessionParametersKHR);
+    VULKAN_FN(vkCmdBeginVideoCodingKHR);
+    VULKAN_FN(vkCmdControlVideoCodingKHR);
+    VULKAN_FN(vkCmdDecodeVideoKHR);
+    VULKAN_FN(vkCmdEndVideoCodingKHR);
+
     VULKAN_FN(vkCreateSemaphore);
     VULKAN_FN(vkDestroySemaphore);
     VULKAN_FN(vkCreateEvent);

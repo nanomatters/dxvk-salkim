@@ -402,6 +402,18 @@ namespace dxvk {
       if (fence->getValue() < value)
         m_waitSemaphores.emplace_back(std::move(fence), value);
     }
+
+    /** Adds a GPU wait for memory visibility across queues. */
+    void waitForExternalWrite(Rc<DxvkFence> fence, uint64_t value) {
+      for (auto& wait : m_waitSemaphores) {
+        if (wait.fence == fence) {
+          wait.value = std::max(wait.value, value);
+          return;
+        }
+      }
+
+      m_waitSemaphores.emplace_back(std::move(fence), value);
+    }
     
     /**
      * \brief Signals fence

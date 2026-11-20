@@ -7,6 +7,7 @@
 
 #include "dxvk_device.h"
 #include "dxvk_context.h"
+#include "dxvk_h264.h"
 
 namespace dxvk {
   
@@ -545,6 +546,24 @@ namespace dxvk {
   }
   
   
+  void DxvkContext::copyH264Frame(
+    const DxvkH264DecodedFrame& frame,
+    const Rc<DxvkImage>&        dstImage,
+          uint32_t              dstLayer,
+          VkExtent2D            extent) {
+    // The semaphore makes writes on the decode queue visible to the copy,
+    // while the source stays busy until the graphics copy completes.
+    m_cmd->waitForExternalWrite(frame.fence, frame.fenceValue);
+    m_cmd->track(frame.storage);
+    m_cmd->track(frame.image, DxvkAccess::Read);
+
+    const auto aspects = frame.image->formatInfo()->aspectMask;
+    copyImage(dstImage, { aspects, 0, dstLayer, 1 }, { },
+      frame.image, { aspects, 0, frame.layer, 1 }, { },
+      { extent.width, extent.height, 1 });
+  }
+
+
   void DxvkContext::copyImageRegion(
     const Rc<DxvkImage>&        dstImage,
           VkImageSubresourceLayers dstSubresource,
