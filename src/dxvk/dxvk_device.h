@@ -55,7 +55,7 @@ namespace dxvk {
    */
   struct DxvkDeviceQueue {
     VkQueue       queueHandle = VK_NULL_HANDLE;
-    uint32_t      queueFamily = 0u;
+    uint32_t      queueFamily = VK_QUEUE_FAMILY_IGNORED;
     uint32_t      queueIndex  = 0u;
 
     DxvkDeviceQueueInfo properties = { };
@@ -68,6 +68,7 @@ namespace dxvk {
     DxvkDeviceQueue graphics;
     DxvkDeviceQueue transfer;
     DxvkDeviceQueue sparse;
+    DxvkDeviceQueue videoDecode;
   };
   
   /**

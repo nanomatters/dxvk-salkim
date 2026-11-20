@@ -12,6 +12,14 @@ namespace dxvk {
 
   class DxvkInstance;
 
+  struct DxvkH264DecodeInfo {
+    VkVideoCapabilitiesKHR     capabilities = { VK_STRUCTURE_TYPE_VIDEO_CAPABILITIES_KHR };
+    VkVideoFormatPropertiesKHR outputFormat = { };
+    VkVideoFormatPropertiesKHR referenceFormat = { };
+    StdVideoH264LevelIdc       maxLevelIdc = STD_VIDEO_H264_LEVEL_IDC_INVALID;
+    bool                       distinctOutput = false;
+  };
+
   /**
    * \brief Device info
    * 
@@ -22,6 +30,7 @@ namespace dxvk {
    */
   struct DxvkDeviceInfo {
     Version                                                   driverVersion = { };
+    DxvkH264DecodeInfo                                        h264Decode = { };
     VkPhysicalDeviceProperties2                               core                            = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
     VkPhysicalDeviceVulkan11Properties                        vk11                            = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES };
     VkPhysicalDeviceVulkan12Properties                        vk12                            = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES };
@@ -113,6 +122,9 @@ namespace dxvk {
     VkBool32                                                  khrSwapchain                    = VK_FALSE;
     VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR          khrSwapchainMaintenance1        = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR };
     VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR            khrUnifiedImageLayouts          = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR };
+    VkBool32                                                  khrVideoQueue                   = VK_FALSE;
+    VkBool32                                                  khrVideoDecodeQueue             = VK_FALSE;
+    VkBool32                                                  khrVideoDecodeH264              = VK_FALSE;
     VkBool32                                                  khrSwapchainMutableFormat       = VK_FALSE;
     VkBool32                                                  khrWin32KeyedMutex              = VK_FALSE;
     VkBool32                                                  amdBufferMarker                 = VK_FALSE;
@@ -194,6 +206,9 @@ namespace dxvk {
     VkExtensionProperties khrSwapchainMaintenance1          = vk::makeExtension(VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
     VkExtensionProperties khrSwapchainMutableFormat         = vk::makeExtension(VK_KHR_SWAPCHAIN_MUTABLE_FORMAT_EXTENSION_NAME);
     VkExtensionProperties khrUnifiedImageLayouts            = vk::makeExtension(VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME);
+    VkExtensionProperties khrVideoQueue                     = vk::makeExtension(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
+    VkExtensionProperties khrVideoDecodeQueue               = vk::makeExtension(VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME);
+    VkExtensionProperties khrVideoDecodeH264                = vk::makeExtension(VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME);
     VkExtensionProperties khrWin32KeyedMutex                = vk::makeExtension(VK_KHR_WIN32_KEYED_MUTEX_EXTENSION_NAME);
     VkExtensionProperties amdBufferMarker                   = vk::makeExtension(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
     VkExtensionProperties amdMixedAttachmentSamples         = vk::makeExtension(VK_AMD_MIXED_ATTACHMENT_SAMPLES_EXTENSION_NAME);
@@ -213,6 +228,7 @@ namespace dxvk {
   struct DxvkDeviceQueueInfo {
     VkQueueFamilyProperties2                    core              = { VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2 };
     VkQueueFamilyOwnershipTransferPropertiesKHR ownershipTransfer = { VK_STRUCTURE_TYPE_QUEUE_FAMILY_OWNERSHIP_TRANSFER_PROPERTIES_KHR };
+    VkQueueFamilyVideoPropertiesKHR             video             = { VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR };
   };
 
 
@@ -232,6 +248,7 @@ namespace dxvk {
     DxvkDeviceQueueIndex graphics;
     DxvkDeviceQueueIndex transfer;
     DxvkDeviceQueueIndex sparse;
+    DxvkDeviceQueueIndex videoDecode;
   };
 
 
@@ -249,7 +266,8 @@ namespace dxvk {
       const DxvkInstance&               instance,
             VkPhysicalDevice            adapter,
       const VkDeviceCreateInfo*         deviceInfo,
-            bool                        safeMode = false);
+            bool                        safeMode = false,
+            bool                        enableVideoDecode = false);
 
     DxvkDeviceCapabilities(const DxvkDeviceCapabilities&) = delete;
 
@@ -426,7 +444,12 @@ namespace dxvk {
     void initQueueProperties(
       const DxvkInstance&               instance,
             VkPhysicalDevice            adapter,
-      const VkDeviceCreateInfo*         deviceInfo);
+      const VkDeviceCreateInfo*         deviceInfo,
+            bool                        queryVideo);
+
+    void initH264Decode(
+      const DxvkInstance&               instance,
+            VkPhysicalDevice            adapter);
 
     void initMemoryProperties(
       const DxvkInstance&               instance,

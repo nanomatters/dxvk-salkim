@@ -193,10 +193,18 @@ static void decode(
 }
 
 int main(int argc, char** argv) {
-  const bool expectUnsupported = argc == 2 && !std::strcmp(argv[1], "--expect-unsupported");
-  if (argc != 1 && !expectUnsupported) {
-    std::fprintf(stderr, "Usage: h264.exe [--expect-unsupported]\n");
-    return 2;
+  UINT flags = 0;
+  bool expectUnsupported = false;
+
+  for (int i = 1; i < argc; i++) {
+    if (!std::strcmp(argv[i], "--video-support")) {
+      flags = D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+    } else if (!std::strcmp(argv[i], "--expect-unsupported")) {
+      expectUnsupported = true;
+    } else {
+      std::fprintf(stderr, "Usage: h264.exe [--video-support] [--expect-unsupported]\n");
+      return 2;
+    }
   }
 
   try {
@@ -204,7 +212,7 @@ int main(int argc, char** argv) {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
-          D3D11_CREATE_DEVICE_VIDEO_SUPPORT, &level, 1, D3D11_SDK_VERSION,
+          flags, &level, 1, D3D11_SDK_VERSION,
           &device, nullptr, &context), "D3D11CreateDevice");
 
     ComPtr<ID3D11VideoDevice> videoDevice;

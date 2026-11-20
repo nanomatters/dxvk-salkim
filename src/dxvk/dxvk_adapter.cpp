@@ -196,11 +196,19 @@ namespace dxvk {
   }
 
 
-  Rc<DxvkDevice> DxvkAdapter::createDevice() {
-    Rc<DxvkDevice> device = createDevice(false);
+  Rc<DxvkDevice> DxvkAdapter::createDevice(bool enableVideoDecode) {
+    bool usedVideoDecode = false;
+    Rc<DxvkDevice> device = tryCreateDevice(enableVideoDecode, false, &usedVideoDecode);
 
-    if (!device)
-      device = createDevice(true);
+    if (!device && usedVideoDecode) {
+      Logger::warn("Retrying device creation without video decoding.");
+      device = tryCreateDevice(false, false);
+    }
+
+    if (!device) {
+      Logger::warn("Retrying device creation in safe mode.");
+      device = tryCreateDevice(false, true);
+    }
 
     if (!device)
       throw DxvkError("Failed to initialize DXVK device.");
@@ -209,10 +217,10 @@ namespace dxvk {
   }
 
 
-  Rc<DxvkDevice> DxvkAdapter::createDevice(bool safeMode) {
+  Rc<DxvkDevice> DxvkAdapter::tryCreateDevice(bool enableVideoDecode, bool safeMode, bool* usedVideoDecode) {
     auto vk = m_instance->vki();
 
-    DxvkDeviceCapabilities caps(*m_instance, m_handle, nullptr, safeMode);
+    DxvkDeviceCapabilities caps(*m_instance, m_handle, nullptr, safeMode, enableVideoDecode);
 
     Logger::info("Creating device:");
     caps.logDeviceInfo();
@@ -254,6 +262,8 @@ namespace dxvk {
 
     // Query queue infos
     DxvkDeviceQueueMapping queueMapping = caps.getQueueMapping();
+    if (usedVideoDecode)
+      *usedVideoDecode = queueMapping.videoDecode.family != VK_QUEUE_FAMILY_IGNORED;
 
     uint32_t queueCount = { };
     caps.queryDeviceQueues(&queueCount, nullptr);
@@ -290,8 +300,7 @@ namespace dxvk {
     VkResult vr = vk->vkCreateDevice(m_handle, &deviceInfo, nullptr, &device);
 
     if (vr) {
-      Logger::err(str::format("Failed to create Vulkan device: ", vr,
-        safeMode ? "" : ", retrying 'safe mode'."));
+      Logger::err(str::format("Failed to create Vulkan device: ", vr));
       return nullptr;
     }
 
@@ -301,6 +310,7 @@ namespace dxvk {
     deviceQueues.graphics = getDeviceQueue(vkd, caps, queueMapping.graphics);
     deviceQueues.transfer = getDeviceQueue(vkd, caps, queueMapping.transfer);
     deviceQueues.sparse   = getDeviceQueue(vkd, caps, queueMapping.sparse);
+    deviceQueues.videoDecode = getDeviceQueue(vkd, caps, queueMapping.videoDecode);
 
     return new DxvkDevice(m_instance, this, vkd, caps, deviceQueues, DxvkQueueCallback());
   }

@@ -116,6 +116,8 @@ namespace dxvk::vk {
     VULKAN_FN(vkGetPhysicalDeviceQueueFamilyProperties2);
     VULKAN_FN(vkGetPhysicalDeviceSparseImageFormatProperties);
     VULKAN_FN(vkGetPhysicalDeviceSparseImageFormatProperties2);
+    VULKAN_FN(vkGetPhysicalDeviceVideoCapabilitiesKHR);
+    VULKAN_FN(vkGetPhysicalDeviceVideoFormatPropertiesKHR);
 
     #ifdef VK_KHR_calibrated_timestamps
     VULKAN_FN(vkGetPhysicalDeviceCalibrateableTimeDomainsKHR);

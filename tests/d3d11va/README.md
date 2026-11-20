@@ -22,8 +22,13 @@ Wine prefix with native overrides. To test a specific Vulkan driver, set
 WINEPREFIX="$test_dir/prefix" WINEDLLOVERRIDES='d3d11,dxgi=n' wine "$test_dir/h264.exe"
 ```
 
-On the current baseline, pass `--expect-unsupported` to check that DXVK exposes
-no H.264 decoder. In normal mode, a missing profile is a failure.
+The test creates the device with flags set to zero, as ANGLE does in its
+regular D3D11 path. Pass `--video-support` to create the device with
+`D3D11_CREATE_DEVICE_VIDEO_SUPPORT`.
+
+Pass `--expect-unsupported` to check that DXVK exposes no H.264 decoder.
+You can combine it with `--video-support` in either order. In normal mode,
+a missing profile is a failure.
 
 The fixture is synthetic. Run `python3 generate-fixture.py` to reproduce the
 slice bytes and expected NV12 hashes using x264 and FFmpeg. The P frame

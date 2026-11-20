@@ -233,7 +233,7 @@ namespace dxvk {
      * Creates a logical device for this adapter.
      * \returns Device handle
      */
-    Rc<DxvkDevice> createDevice();
+    Rc<DxvkDevice> createDevice(bool enableVideoDecode = false);
     
     /**
      * \brief Imports a foreign device
@@ -330,7 +330,7 @@ namespace dxvk {
 
     std::array<DxvkAdapterMemoryStats, VK_MAX_MEMORY_HEAPS> m_memoryStats = { };
 
-    Rc<DxvkDevice> createDevice(bool safeMode);
+    Rc<DxvkDevice> tryCreateDevice(bool enableVideoDecode, bool safeMode, bool* usedVideoDecode = nullptr);
 
   };
   

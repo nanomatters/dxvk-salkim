@@ -70,6 +70,9 @@ namespace dxvk {
     HANDLE_EXT(khrSwapchainMaintenance1);          \
     HANDLE_EXT(khrSwapchainMutableFormat);         \
     HANDLE_EXT(khrUnifiedImageLayouts);            \
+    HANDLE_EXT(khrVideoQueue);                     \
+    HANDLE_EXT(khrVideoDecodeQueue);               \
+    HANDLE_EXT(khrVideoDecodeH264);                \
     HANDLE_EXT(khrWin32KeyedMutex);                \
     HANDLE_EXT(amdBufferMarker);                   \
     HANDLE_EXT(amdMixedAttachmentSamples);         \
@@ -107,7 +110,8 @@ namespace dxvk {
     const DxvkInstance&               instance,
           VkPhysicalDevice            adapter,
     const VkDeviceCreateInfo*         deviceInfo,
-          bool                        safeMode) {
+          bool                        safeMode,
+          bool                        enableVideoDecode) {
     // Can't query anything on a Vulkan 1.0 device
     auto vk = instance.vki();
     vk->vkGetPhysicalDeviceProperties(adapter, &m_properties.core.properties);
@@ -118,7 +122,24 @@ namespace dxvk {
     initSupportedExtensions(instance, adapter, deviceInfo);
     initSupportedFeatures(instance, adapter, deviceInfo);
     initDeviceProperties(instance, adapter, deviceInfo);
-    initQueueProperties(instance, adapter, deviceInfo);
+
+    const bool queryVideo = enableVideoDecode && !deviceInfo && !safeMode
+      && m_featuresSupported.khrVideoQueue
+      && m_featuresSupported.khrVideoDecodeQueue
+      && m_featuresSupported.khrVideoDecodeH264
+      && vk->vkGetPhysicalDeviceVideoCapabilitiesKHR
+      && vk->vkGetPhysicalDeviceVideoFormatPropertiesKHR;
+
+    initQueueProperties(instance, adapter, deviceInfo, queryVideo);
+
+    if (queryVideo)
+      initH264Decode(instance, adapter);
+
+    const bool videoDecode = m_queueMapping.videoDecode.family != VK_QUEUE_FAMILY_IGNORED;
+    m_featuresSupported.khrVideoQueue = videoDecode;
+    m_featuresSupported.khrVideoDecodeQueue = videoDecode;
+    m_featuresSupported.khrVideoDecodeH264 = videoDecode;
+
     initMemoryProperties(instance, adapter);
 
     disableUnusedFeatures(instance, safeMode);
@@ -221,6 +242,20 @@ namespace dxvk {
            << "  Graphics : (" << m_queueMapping.graphics.family << ", " << m_queueMapping.graphics.index << ")" << std::endl
            << "  Transfer : (" << m_queueMapping.transfer.family << ", " << m_queueMapping.transfer.index << ")" << std::endl
            << "  Sparse   : (" << m_queueMapping.sparse.family   << ", " << m_queueMapping.sparse.index   << ")" << std::endl;
+
+    if (m_queueMapping.videoDecode.family != VK_QUEUE_FAMILY_IGNORED) {
+      const auto& queue = m_queueMapping.videoDecode;
+      const auto& decode = m_properties.h264Decode;
+      const auto& caps = decode.capabilities;
+      stream << "  Video    : (" << queue.family << ", " << queue.index << ")" << std::endl
+             << "  H.264 High progressive NV12: "
+             << caps.minCodedExtent.width << "x" << caps.minCodedExtent.height << " to "
+             << caps.maxCodedExtent.width << "x" << caps.maxCodedExtent.height
+             << ", " << caps.maxActiveReferencePictures << " references in " << caps.maxDpbSlots << " DPB slots"
+             << (decode.distinctOutput ? ", separate output" : ", shared output") << std::endl
+             << "  Video bitstream alignment (offset/size): "
+             << caps.minBitstreamBufferOffsetAlignment << "/" << caps.minBitstreamBufferSizeAlignment << std::endl;
+    }
 
     // Log memory type and heap properties
     static const std::array<std::pair<VkMemoryPropertyFlagBits, const char*>, 8> s_flags = {{
@@ -437,14 +472,15 @@ namespace dxvk {
   void DxvkDeviceCapabilities::initQueueProperties(
     const DxvkInstance&               instance,
           VkPhysicalDevice            adapter,
-    const VkDeviceCreateInfo*         deviceInfo) {
+    const VkDeviceCreateInfo*         deviceInfo,
+          bool                        queryVideo) {
     auto vk = instance.vki();
 
     uint32_t queueCount = 0u;
     vk->vkGetPhysicalDeviceQueueFamilyProperties2(adapter, &queueCount, nullptr);
 
     // Use local array of base structures as the API requires,
-    // then copy the base structure back to the metadata array
+    // then copy the returned properties without the query chain
     std::vector<VkQueueFamilyProperties2> queueFamilies(queueCount, { VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2 });
 
     // Chain extension structs directly into the metadata structure
@@ -456,12 +492,18 @@ namespace dxvk {
 
       if (m_featuresSupported.khrMaintenance9.maintenance9)
         meta.ownershipTransfer.pNext = std::exchange(base.pNext, &meta.ownershipTransfer);
+
+      if (queryVideo)
+        meta.video.pNext = std::exchange(base.pNext, &meta.video);
     }
 
     vk->vkGetPhysicalDeviceQueueFamilyProperties2(adapter, &queueCount, queueFamilies.data());
 
-    for (uint32_t i = 0u; i < queueCount; i++)
-      m_queuesAvailable[i].core = queueFamilies[i];
+    for (uint32_t i = 0u; i < queueCount; i++) {
+      auto& meta = m_queuesAvailable[i];
+      meta.core.queueFamilyProperties = queueFamilies[i].queueFamilyProperties;
+      meta.video.pNext = nullptr;
+    }
 
     if (deviceInfo) {
       // Only mark queues available that the device has been created with
@@ -476,6 +518,87 @@ namespace dxvk {
         m_queuesAvailable[i].core.queueFamilyProperties.queueCount = queueCount;
       }
     }
+  }
+
+
+  void DxvkDeviceCapabilities::initH264Decode(
+    const DxvkInstance&               instance,
+          VkPhysicalDevice            adapter) {
+    auto queue = std::find_if(m_queuesAvailable.begin(), m_queuesAvailable.end(),
+      [] (const DxvkDeviceQueueInfo& info) {
+        const auto& props = info.core.queueFamilyProperties;
+        return props.queueCount
+            && (props.queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR)
+            && (info.video.videoCodecOperations & VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR);
+      });
+
+    if (queue == m_queuesAvailable.end())
+      return;
+
+    VkVideoDecodeH264ProfileInfoKHR h264Profile = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_PROFILE_INFO_KHR };
+    h264Profile.stdProfileIdc = STD_VIDEO_H264_PROFILE_IDC_HIGH;
+    h264Profile.pictureLayout = VK_VIDEO_DECODE_H264_PICTURE_LAYOUT_PROGRESSIVE_KHR;
+
+    VkVideoProfileInfoKHR profile = { VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR, &h264Profile };
+    profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR;
+    profile.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
+    profile.lumaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+    profile.chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+
+    VkVideoDecodeH264CapabilitiesKHR h264Caps = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_CAPABILITIES_KHR };
+    VkVideoDecodeCapabilitiesKHR decodeCaps = { VK_STRUCTURE_TYPE_VIDEO_DECODE_CAPABILITIES_KHR, &h264Caps };
+    VkVideoCapabilitiesKHR caps = { VK_STRUCTURE_TYPE_VIDEO_CAPABILITIES_KHR, &decodeCaps };
+    auto vk = instance.vki();
+
+    if (vk->vkGetPhysicalDeviceVideoCapabilitiesKHR(adapter, &profile, &caps) != VK_SUCCESS
+     || !caps.maxActiveReferencePictures || !caps.maxDpbSlots)
+      return;
+
+    VkVideoProfileListInfoKHR profiles = { VK_STRUCTURE_TYPE_VIDEO_PROFILE_LIST_INFO_KHR };
+    profiles.profileCount = 1u;
+    profiles.pProfiles = &profile;
+
+    auto findFormat = [&] (VkImageUsageFlags usage, VkFormat requiredFormat) -> VkVideoFormatPropertiesKHR {
+      VkPhysicalDeviceVideoFormatInfoKHR info = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_FORMAT_INFO_KHR, &profiles };
+      info.imageUsage = usage;
+
+      uint32_t count = 0u;
+      if (vk->vkGetPhysicalDeviceVideoFormatPropertiesKHR(adapter, &info, &count, nullptr) != VK_SUCCESS || !count)
+        return { };
+
+      std::vector<VkVideoFormatPropertiesKHR> formats(count, { VK_STRUCTURE_TYPE_VIDEO_FORMAT_PROPERTIES_KHR });
+      VkResult vr = vk->vkGetPhysicalDeviceVideoFormatPropertiesKHR(adapter, &info, &count, formats.data());
+      if (vr != VK_SUCCESS && vr != VK_INCOMPLETE)
+        return { };
+
+      for (uint32_t i = 0u; i < count; i++) {
+        const auto& format = formats[i];
+        if (format.format != VK_FORMAT_UNDEFINED
+         && (requiredFormat == VK_FORMAT_UNDEFINED || format.format == requiredFormat)
+         && format.imageType == VK_IMAGE_TYPE_2D && format.imageTiling == VK_IMAGE_TILING_OPTIMAL)
+          return format;
+      }
+
+      return { };
+    };
+
+    // Decode into a private NV12 image that can be copied to the D3D11 texture.
+    VkImageUsageFlags outputUsage = VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    const bool distinctOutput = decodeCaps.flags & VK_VIDEO_DECODE_CAPABILITY_DPB_AND_OUTPUT_DISTINCT_BIT_KHR;
+    if (!distinctOutput)
+      outputUsage |= VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR;
+
+    auto output = findFormat(outputUsage, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM);
+    if (output.format == VK_FORMAT_UNDEFINED)
+      return;
+
+    auto references = distinctOutput ? findFormat(VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR, VK_FORMAT_UNDEFINED) : output;
+    if (references.format == VK_FORMAT_UNDEFINED)
+      return;
+
+    caps.pNext = nullptr;
+    m_properties.h264Decode = { caps, output, references, h264Caps.maxLevelIdc, distinctOutput };
+    m_queueMapping.videoDecode.family = uint32_t(queue - m_queuesAvailable.begin());
   }
 
 
@@ -730,6 +853,7 @@ namespace dxvk {
     enableQueue(m_queueMapping.graphics);
     enableQueue(m_queueMapping.transfer);
     enableQueue(m_queueMapping.sparse);
+    enableQueue(m_queueMapping.videoDecode);
 
     // Fix up queue priority pointers
     uint32_t maxQueueCount = 0u;
@@ -1108,6 +1232,11 @@ namespace dxvk {
 
       /* Use GENERAL layout for everything */
       ENABLE_EXT_FEATURE(khrUnifiedImageLayouts, unifiedImageLayouts, false),
+
+      /* Hardware video decoding */
+      ENABLE_EXT(khrVideoQueue, false),
+      ENABLE_EXT(khrVideoDecodeQueue, false),
+      ENABLE_EXT(khrVideoDecodeH264, false),
 
       /* Keyed mutex support in wine */
       ENABLE_EXT(khrWin32KeyedMutex, false),

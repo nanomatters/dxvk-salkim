@@ -66,7 +66,7 @@ extern "C" {
 
     try {
       // Create Vulkan device so we have up-to-date features / properties
-      Rc<DxvkDevice> dxvkDevice = dxvkAdapter->createDevice();
+      Rc<DxvkDevice> dxvkDevice = dxvkAdapter->createDevice(true);
 
       // Find the highest feature level supported by the device.
       // This works because the feature level array is ordered.
