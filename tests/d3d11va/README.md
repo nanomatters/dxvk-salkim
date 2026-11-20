@@ -30,6 +30,17 @@ Pass `--expect-unsupported` to check that DXVK exposes no H.264 decoder.
 You can combine it with `--video-support` in either order. In normal mode,
 a missing profile is a failure.
 
+Pass `--recover-missing-reference` to test recovery on DXVK. This submits a P
+frame with a missing reference after a valid decode and as the first frame on a
+fresh decoder. For both cases the test checks that the failed frame leaves its
+destination untouched, then verifies the NV12 hashes of a valid IDR and its
+dependent P frame on fresh output slices of the same decoder.
+
+Pass `--grow-dpb` to exercise decoded picture buffer growth on the same DXVK
+decoder. Each round submits an IDR and P frame, then submits another IDR and P
+frame with a larger reference limit on two separate output slices. It checks all
+four NV12 hashes after submission and reuses the four slices in the second round.
+
 The fixture is synthetic. Run `python3 generate-fixture.py` to reproduce the
 slice bytes and expected NV12 hashes using x264 and FFmpeg. The P frame
 references the IDR for 15 of its 16 macroblocks.
