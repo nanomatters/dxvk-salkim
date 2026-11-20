@@ -126,3 +126,26 @@ WINEDLLOVERRIDES='d3d11,dxgi=n' python3 av1.py wine /path/to/ffmpeg.exe
 Pass `--depth 8` or `--depth 10` before the Wine command to test one
 output format. D3D11 uses the same AV1 Profile 0 GUID for both, and
 `CheckVideoDecoderFormat` reports the available depths individually.
+
+Run `python3 av1-headers.py` on Linux to test the frame header and tile-group
+bytes independently of a Vulkan driver. It builds the production translator
+with a C++17 compiler and uses FFmpeg's libdav1d decoder to compare all three
+pictures with the original clip. The clip has a key picture, two inter
+pictures, four tiles per picture and film grain.
+
+`av1-headers.dxva` contains the three submissions made by FFmpeg's D3D11VA
+decoder for `av1-headers.ivf`. Each record stores five little-endian 32-bit
+values (tile count, bitstream length, decoder width, height and DXGI format),
+then the picture parameters, tile descriptors and bitstream buffer passed to
+D3D11. The replay supplies the sequence header separately, as Vulkan does.
+The lookahead case in `av1.py` uses the explicit reference pictures supplied to
+Vulkan. Those bindings cannot always be recovered from a standalone stream
+because DXVA omits the original AV1 refresh mask.
+
+The original clip was generated with this command.
+
+```sh
+ffmpeg -f lavfi -i 'color=c=0x456789:size=256x128:rate=8,drawgrid=x=7:y=5:w=40:h=21:t=1:c=red,scroll=h=0.012:v=0.01' \
+  -frames:v 3 -c:v libaom-av1 -threads 1 -cpu-used 6 -crf 35 -b:v 0 \
+  -lag-in-frames 0 -g 8 -tiles 2x2 -aom-params film-grain-test=1 -f ivf av1-headers.ivf
+```
