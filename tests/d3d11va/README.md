@@ -92,3 +92,18 @@ The CRA picture switches to an SPS with a four-picture buffer and an empty
 reference set. A P picture and a B picture follow in decode order. Comparing
 these pictures with software decoding checks playback across the SPS change.
 Windows FFmpeg creates a new D3D11VA decoder when the SPS changes.
+
+For the same SPS change on a single D3D11 decoder, build and run the direct
+test from this directory with the matching DXVK DLLs next to the executable.
+
+```sh
+x86_64-w64-mingw32-g++ -std=c++17 -O2 -Wall -Wextra -Werror -static \
+  hevc-dpb.cpp -ld3d11 -o "$test_dir/hevc-dpb.exe"
+WINEDLLOVERRIDES='d3d11,dxgi=n' wine "$test_dir/hevc-dpb.exe" cra-dpb-growth.hevc
+```
+
+Each run submits IDR, CRA, P and B pictures on one decoder, then repeats on a
+second decoder with a BLA_N_LP in place of the CRA. Both random-access
+pictures have an empty reference set. The final B picture needs both new
+references. The test checks all four NV12 output hashes against software in
+each case, including the IDR submitted before the reference buffer grew.
