@@ -263,7 +263,8 @@ namespace dxvk {
     // Query queue infos
     DxvkDeviceQueueMapping queueMapping = caps.getQueueMapping();
     if (usedVideoDecode)
-      *usedVideoDecode = queueMapping.videoDecode.family != VK_QUEUE_FAMILY_IGNORED;
+      *usedVideoDecode = queueMapping.videoDecode.family != VK_QUEUE_FAMILY_IGNORED
+                      || queueMapping.hevcDecode.family != VK_QUEUE_FAMILY_IGNORED;
 
     uint32_t queueCount = { };
     caps.queryDeviceQueues(&queueCount, nullptr);
@@ -311,6 +312,7 @@ namespace dxvk {
     deviceQueues.transfer = getDeviceQueue(vkd, caps, queueMapping.transfer);
     deviceQueues.sparse   = getDeviceQueue(vkd, caps, queueMapping.sparse);
     deviceQueues.videoDecode = getDeviceQueue(vkd, caps, queueMapping.videoDecode);
+    deviceQueues.hevcDecode = getDeviceQueue(vkd, caps, queueMapping.hevcDecode);
 
     return new DxvkDevice(m_instance, this, vkd, caps, deviceQueues, DxvkQueueCallback());
   }

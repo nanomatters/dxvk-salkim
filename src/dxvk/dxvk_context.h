@@ -13,7 +13,7 @@
 
 namespace dxvk {
 
-  struct DxvkH264DecodedFrame;
+  struct DxvkDecodedFrame;
 
   /**
    * \brief DXVK context
@@ -545,8 +545,8 @@ namespace dxvk {
             VkExtent3D            extent);
     
     /** Copies the decoded NV12 planes into the application's output view. */
-    void copyH264Frame(
-      const DxvkH264DecodedFrame& frame,
+    void copyVideoFrame(
+      const DxvkDecodedFrame& frame,
       const Rc<DxvkImage>&        dstImage,
             uint32_t              dstLayer,
             VkExtent2D            extent);

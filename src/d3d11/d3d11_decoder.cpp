@@ -5,45 +5,80 @@
 #include <limits>
 #include <new>
 #include <stdexcept>
+#include <variant>
 #include <vector>
 
 #include "d3d11_context_imm.h"
 #include "d3d11_video.h"
 #include "d3d11_video_h264.h"
+#include "d3d11_video_hevc.h"
 
-#include "../dxvk/dxvk_h264.h"
+#include "../dxvk/dxvk_video_decoder.h"
 
 namespace dxvk {
 
   namespace {
 
-    constexpr GUID H264Profile = { 0x1b81be68, 0xa0c7, 0x11d3, { 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5 } };
+    struct DecoderProfile {
+      GUID guid;
+      DxvkVideoProfile codec;
+      DXGI_FORMAT format;
+      UINT rawBitstream;
+    };
+
+    constexpr DecoderProfile profiles[] = {
+      { { 0x1b81be68, 0xa0c7, 0x11d3, { 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5 } },
+        DxvkVideoProfile::H264, DXGI_FORMAT_NV12, 2 },
+      { { 0x5b11d51b, 0x2f4c, 0x4452, { 0xbc, 0xc3, 0x09, 0xf2, 0xa1, 0x16, 0x0c, 0xc0 } },
+        DxvkVideoProfile::HevcMain, DXGI_FORMAT_NV12, 1 },
+      { { 0x107af0e0, 0xef1a, 0x4d19, { 0xab, 0xa8, 0x67, 0xa1, 0x63, 0x07, 0x3d, 0x13 } },
+        DxvkVideoProfile::HevcMain10, DXGI_FORMAT_P010, 1 },
+    };
     constexpr GUID NoEncryption = { 0x1b81bed0, 0xa0c7, 0x11d3, { 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5 } };
 
-    bool supportsH264Desc(D3D11Device* device, const D3D11_VIDEO_DECODER_DESC& desc) {
-      if (!DxvkH264Decoder::supports(device->GetDXVKDevice().ptr()) || desc.Guid != H264Profile
-       || desc.OutputFormat != DXGI_FORMAT_NV12
-       || !desc.SampleWidth || !desc.SampleHeight
+    const DecoderProfile* findProfile(D3D11Device* device, const GUID& guid) {
+      for (const auto& profile : profiles) {
+        if (profile.guid == guid && DxvkVideoDecoder::supports(device->GetDXVKDevice().ptr(), profile.codec))
+          return &profile;
+      }
+      return nullptr;
+    }
+
+    bool getSessionExtent(D3D11Device* device, const DecoderProfile& profile,
+        const D3D11_VIDEO_DECODER_DESC& desc, VkExtent2D& extent) {
+      if (desc.OutputFormat != profile.format || !desc.SampleWidth || !desc.SampleHeight
        || ((desc.SampleWidth | desc.SampleHeight) & 1u))
         return false;
 
-      const auto& video = device->GetDXVKDevice()->properties().h264Decode;
-      const auto& caps = video.capabilities;
-
-      if (desc.SampleWidth > caps.maxCodedExtent.width
-       || desc.SampleHeight > caps.maxCodedExtent.height)
+      const auto& props = device->GetDXVKDevice()->properties();
+      const bool h264 = profile.codec == DxvkVideoProfile::H264;
+      const auto& hevc = props.hevcDecode[profile.codec == DxvkVideoProfile::HevcMain10];
+      const auto& caps = h264 ? props.h264Decode.capabilities : hevc.capabilities;
+      if (desc.SampleWidth > caps.maxCodedExtent.width || desc.SampleHeight > caps.maxCodedExtent.height)
         return false;
 
-      VkExtent2D codedExtent = {
-        align(desc.SampleWidth, 16u),
-        align(desc.SampleHeight, 16u),
-      };
+      const uint32_t block = h264 ? 16u : 8u;
+      extent = { align(desc.SampleWidth, block), align(desc.SampleHeight, block) };
+      if (extent.width < caps.minCodedExtent.width || extent.height < caps.minCodedExtent.height
+       || extent.width > caps.maxCodedExtent.width || extent.height > caps.maxCodedExtent.height)
+        return false;
 
-      return codedExtent.width >= caps.minCodedExtent.width
-          && codedExtent.height >= caps.minCodedExtent.height
-          && codedExtent.width <= caps.maxCodedExtent.width
-          && codedExtent.height <= caps.maxCodedExtent.height
-          && h264LevelSupportsExtent(video.maxLevelIdc, codedExtent);
+      if (h264)
+        return h264LevelSupportsExtent(props.h264Decode.maxLevelIdc, extent);
+
+      if (!h265LevelSupportsExtent(hevc.maxLevelIdc, extent))
+        return false;
+
+      // The HEVC minimum coding block size arrives with the picture parameters.
+      // Reserve room for its padding and use the actual SPS extent at decode.
+      extent.width = std::min(align(desc.SampleWidth, 64u), caps.maxCodedExtent.width);
+      extent.height = std::min(align(desc.SampleHeight, 64u), caps.maxCodedExtent.height);
+      return true;
+    }
+
+    const DecoderProfile* findConfig(D3D11Device* device, const D3D11_VIDEO_DECODER_DESC& desc, VkExtent2D& extent) {
+      const auto* profile = findProfile(device, desc.Guid);
+      return profile && getSessionExtent(device, *profile, desc, extent) ? profile : nullptr;
     }
 
     bool belongsToDevice(ID3D11DeviceChild* child, ID3D11Device* device) {
@@ -76,9 +111,23 @@ namespace dxvk {
       std::vector<uint8_t> bytes;
     };
 
+    using PictureParameters = std::variant<DxvkH264PictureParameters, DxvkH265PictureParameters>;
+
+    // DXVA uses the same offset, size and chopping fields in both short-slice records.
+    static_assert(sizeof(DXVA_Slice_HEVC_Short) == sizeof(DXVA_Slice_H264_Short));
+    static_assert(offsetof(DXVA_Slice_HEVC_Short, BSNALunitDataLocation) == offsetof(DXVA_Slice_H264_Short, BSNALunitDataLocation));
+    static_assert(offsetof(DXVA_Slice_HEVC_Short, SliceBytesInBuffer) == offsetof(DXVA_Slice_H264_Short, SliceBytesInBuffer));
+    static_assert(offsetof(DXVA_Slice_HEVC_Short, wBadSliceChopping) == offsetof(DXVA_Slice_H264_Short, wBadSliceChopping));
+
     struct DecoderFrameData {
-      DXVA_PicParams_H264   picture = { };
-      DXVA_Qmatrix_H264     matrix = { };
+      union {
+        DXVA_PicParams_H264 h264;
+        DXVA_PicParams_HEVC hevc;
+      } picture = { };
+      union {
+        DXVA_Qmatrix_H264 h264;
+        DXVA_Qmatrix_HEVC hevc;
+      } matrix = { };
       bool                  havePicture = false;
       bool                  haveMatrix = false;
       bool                  choppedSlice = false;
@@ -127,6 +176,10 @@ namespace dxvk {
         return m_texture;
       }
 
+      const GUID& profile() const {
+        return m_desc.DecodeProfile;
+      }
+
       UINT layer() const {
         return m_desc.Texture2D.ArraySlice;
       }
@@ -141,10 +194,11 @@ namespace dxvk {
 
     class D3D11VideoDecoder final : public D3D11DeviceChild<ID3D11VideoDecoder> {
     public:
-      D3D11VideoDecoder(D3D11Device* device, const D3D11_VIDEO_DECODER_DESC& desc, const D3D11_VIDEO_DECODER_CONFIG& config)
+      D3D11VideoDecoder(D3D11Device* device, const D3D11_VIDEO_DECODER_DESC& desc, const D3D11_VIDEO_DECODER_CONFIG& config,
+        DxvkVideoProfile profile, VkExtent2D extent)
       : D3D11DeviceChild(device), m_desc(desc), m_config(config),
-        m_extent{ align(desc.SampleWidth, 16u), align(desc.SampleHeight, 16u) },
-        m_backend(new DxvkH264Decoder(device->GetDXVKDevice().ptr(), m_extent)),
+        m_profile(profile), m_extent(extent),
+        m_backend(new DxvkVideoDecoder(device->GetDXVKDevice().ptr(), profile, extent)),
         m_destructionNotifier(this) { }
 
       HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** object) override {
@@ -191,7 +245,7 @@ namespace dxvk {
 
         const auto& desc = *output->texture()->Desc();
 
-        if (desc.Width < m_desc.SampleWidth || desc.Height < m_desc.SampleHeight)
+        if (output->profile() != m_desc.Guid || desc.Width < m_desc.SampleWidth || desc.Height < m_desc.SampleHeight)
           return E_INVALIDARG;
 
         m_output = output;
@@ -235,7 +289,7 @@ namespace dxvk {
 
       HRESULT submitBuffers(const D3D11_VIDEO_DECODER_BUFFER_DESC* buffers, UINT count);
 
-      HRESULT endFrame(DxvkH264PictureParameters& params, std::vector<uint8_t>& bytes,
+      HRESULT endFrame(PictureParameters& params, std::vector<uint8_t>& bytes,
         Com<D3D11VideoDecoderOutputView>& output) {
         if (!m_output)
           return E_INVALIDARG;
@@ -254,13 +308,7 @@ namespace dxvk {
         if (m_decodeFailed.load(std::memory_order_relaxed))
           return E_FAIL;
 
-        if (!frame.havePicture || !frame.haveMatrix || frame.choppedSlice || frame.offsets.empty())
-          return E_INVALIDARG;
-
-        const uint32_t codedWidth = 16u * (uint32_t(frame.picture.wFrameWidthInMbsMinus1) + 1u);
-        const uint32_t codedHeight = 16u * (uint32_t(frame.picture.wFrameHeightInMbsMinus1) + 1u);
-
-        if (codedWidth != m_extent.width || codedHeight != m_extent.height)
+        if (!frame.havePicture || frame.choppedSlice || frame.offsets.empty())
           return E_INVALIDARG;
 
         // The Vulkan decoder backends expect a three-byte Annex B prefix.
@@ -278,23 +326,44 @@ namespace dxvk {
         }
         frame.bitstream.resize(size);
 
-        const auto maxLevel = m_parent->GetDXVKDevice()->properties().h264Decode.maxLevelIdc;
-        if (!translateH264PictureParameters(frame.picture, frame.matrix, frame.bitstream, frame.offsets, maxLevel, params))
-          return E_INVALIDARG;
+        const auto& props = m_parent->GetDXVKDevice()->properties();
+        if (m_profile == DxvkVideoProfile::H264) {
+          const auto& pic = frame.picture.h264;
+          if (!frame.haveMatrix || 16u * (pic.wFrameWidthInMbsMinus1 + 1u) != m_extent.width
+           || 16u * (pic.wFrameHeightInMbsMinus1 + 1u) != m_extent.height
+           || !translateH264PictureParameters(pic, frame.matrix.h264, frame.bitstream, frame.offsets,
+                 props.h264Decode.maxLevelIdc, params.emplace<DxvkH264PictureParameters>()))
+            return E_INVALIDARG;
+        } else {
+          const bool main10 = m_profile == DxvkVideoProfile::HevcMain10;
+          const auto& caps = props.hevcDecode[main10];
+          auto& hevc = params.emplace<DxvkH265PictureParameters>();
+          if (!translateH265PictureParameters(frame.picture.hevc, frame.haveMatrix ? &frame.matrix.hevc : nullptr,
+                frame.bitstream, frame.offsets, main10 ? STD_VIDEO_H265_PROFILE_IDC_MAIN_10 : STD_VIDEO_H265_PROFILE_IDC_MAIN,
+                caps.maxLevelIdc, hevc, m_hevcMaxTemporalId))
+            return E_INVALIDARG;
+
+          if (hevc.sps.pic_width_in_luma_samples < std::max(m_desc.SampleWidth, caps.capabilities.minCodedExtent.width)
+           || hevc.sps.pic_height_in_luma_samples < std::max(m_desc.SampleHeight, caps.capabilities.minCodedExtent.height)
+           || hevc.sps.pic_width_in_luma_samples > m_extent.width || hevc.sps.pic_height_in_luma_samples > m_extent.height)
+            return E_INVALIDARG;
+
+          m_hevcMaxTemporalId = hevc.sps.sps_max_sub_layers_minus1;
+        }
 
         bytes = std::move(frame.bitstream);
         return S_OK;
       }
 
-      void decode(DxvkContext* ctx, const DxvkH264PictureParameters& params, const std::vector<uint8_t>& bytes,
+      void decode(DxvkContext* ctx, const PictureParameters& params, const std::vector<uint8_t>& bytes,
         const Rc<DxvkImage>& image, uint32_t layer) {
         if (m_decodeFailed.load(std::memory_order_relaxed))
           return;
 
         try {
-          auto frame = m_backend->decode(params, bytes);
+          auto frame = std::visit([&] (const auto& picture) { return m_backend->decode(picture, bytes); }, params);
           if (frame.image)
-            ctx->copyH264Frame(frame, image, layer, { m_desc.SampleWidth, m_desc.SampleHeight });
+            ctx->copyVideoFrame(frame, image, layer, { m_desc.SampleWidth, m_desc.SampleHeight });
         } catch (const DxvkError& error) {
           m_decodeFailed.store(true, std::memory_order_relaxed);
           Logger::err(error.message());
@@ -309,20 +378,22 @@ namespace dxvk {
         const size_t pixels = size_t(m_extent.width) * m_extent.height;
 
         switch (type) {
-          case DecoderBuffer::Picture:   return sizeof(DXVA_PicParams_H264);
-          case DecoderBuffer::Matrix:    return sizeof(DXVA_Qmatrix_H264);
+          case DecoderBuffer::Picture:   return m_profile == DxvkVideoProfile::H264 ? sizeof(DXVA_PicParams_H264) : sizeof(DXVA_PicParams_HEVC);
+          case DecoderBuffer::Matrix:    return m_profile == DxvkVideoProfile::H264 ? sizeof(DXVA_Qmatrix_H264) : sizeof(DXVA_Qmatrix_HEVC);
           case DecoderBuffer::Slice:     return (pixels / 256u) * sizeof(DXVA_Slice_H264_Short);
-          case DecoderBuffer::Bitstream: return std::max<size_t>(1u << 20, pixels + pixels / 2u);
+          case DecoderBuffer::Bitstream: return std::max<size_t>(1u << 20, m_profile == DxvkVideoProfile::HevcMain10 ? 3u * pixels : pixels + pixels / 2u);
           default:                       return 0u;
         }
       }
 
       D3D11_VIDEO_DECODER_DESC             m_desc;
       D3D11_VIDEO_DECODER_CONFIG           m_config;
+      DxvkVideoProfile                    m_profile;
       VkExtent2D                          m_extent;
-      Rc<DxvkH264Decoder>                  m_backend;
+      Rc<DxvkVideoDecoder>                  m_backend;
       Com<D3D11VideoDecoderOutputView>     m_output;
       DecoderFrameData                    m_frame;
+      uint8_t                             m_hevcMaxTemporalId = 0;
       std::array<DecoderBufferStorage, uint32_t(DecoderBuffer::Count)> m_buffers;
       std::atomic<bool>                   m_decodeFailed = { false };
       D3DDestructionNotifier              m_destructionNotifier;
@@ -363,8 +434,8 @@ namespace dxvk {
       const auto slices = data[uint32_t(DecoderBuffer::Slice)];
       const auto bitstream = data[uint32_t(DecoderBuffer::Bitstream)];
 
-      if ((picture.size && (m_frame.havePicture || picture.size != sizeof(m_frame.picture)))
-       || (matrix.size && (m_frame.haveMatrix || matrix.size != sizeof(m_frame.matrix)))
+      if ((picture.size && (m_frame.havePicture || picture.size != getBufferSize(DecoderBuffer::Picture)))
+       || (matrix.size && (m_frame.haveMatrix || matrix.size != getBufferSize(DecoderBuffer::Matrix)))
        || !!slices.size != !!bitstream.size || slices.size % sizeof(DXVA_Slice_H264_Short))
         return E_INVALIDARG;
 
@@ -404,12 +475,18 @@ namespace dxvk {
       }
 
       if (picture.size) {
-        std::memcpy(&m_frame.picture, picture.bytes, sizeof(m_frame.picture));
+        if (m_profile == DxvkVideoProfile::H264)
+          std::memcpy(&m_frame.picture.h264, picture.bytes, picture.size);
+        else
+          std::memcpy(&m_frame.picture.hevc, picture.bytes, picture.size);
         m_frame.havePicture = true;
       }
 
       if (matrix.size) {
-        std::memcpy(&m_frame.matrix, matrix.bytes, sizeof(m_frame.matrix));
+        if (m_profile == DxvkVideoProfile::H264)
+          std::memcpy(&m_frame.matrix.h264, matrix.bytes, matrix.size);
+        else
+          std::memcpy(&m_frame.matrix.hevc, matrix.bytes, matrix.size);
         m_frame.haveMatrix = true;
       }
 
@@ -441,15 +518,16 @@ namespace dxvk {
           ID3D11VideoDecoder**       decoder) {
     InitReturnPtr(decoder);
 
-    if (!desc || !config || !decoder || !supportsH264Desc(m_device, *desc)
-     || config->ConfigBitstreamRaw != 2u || config->ConfigDecoderSpecific
+    VkExtent2D extent;
+    const auto* profile = desc ? findConfig(m_device, *desc, extent) : nullptr;
+    if (!profile || !config || !decoder || config->ConfigBitstreamRaw != profile->rawBitstream || config->ConfigDecoderSpecific
      || config->guidConfigBitstreamEncryption != NoEncryption
      || config->guidConfigMBcontrolEncryption != NoEncryption
      || config->guidConfigResidDiffEncryption != NoEncryption)
       return E_INVALIDARG;
 
     try {
-      *decoder = ref(new D3D11VideoDecoder(m_device, *desc, *config));
+      *decoder = ref(new D3D11VideoDecoder(m_device, *desc, *config, profile->codec, extent));
       return S_OK;
     } catch (const std::bad_alloc&) {
       return E_OUTOFMEMORY;
@@ -469,8 +547,8 @@ namespace dxvk {
           ID3D11VideoDecoderOutputView**        view) {
     InitReturnPtr(view);
 
-    if (!desc || desc->ViewDimension != D3D11_VDOV_DIMENSION_TEXTURE2D
-     || desc->DecodeProfile != H264Profile || !DxvkH264Decoder::supports(m_device->GetDXVKDevice().ptr())
+    const auto* profile = desc ? findProfile(m_device, desc->DecodeProfile) : nullptr;
+    if (!profile || desc->ViewDimension != D3D11_VDOV_DIMENSION_TEXTURE2D
      || !belongsToDevice(resource, m_device))
       return E_INVALIDARG;
 
@@ -483,7 +561,7 @@ namespace dxvk {
     auto texture = GetCommonTexture(resource);
     const auto& textureDesc = *texture->Desc();
 
-    if (textureDesc.Format != DXGI_FORMAT_NV12 || textureDesc.MipLevels != 1
+    if (textureDesc.Format != profile->format || textureDesc.MipLevels != 1
      || textureDesc.SampleDesc.Count != 1 || textureDesc.Usage != D3D11_USAGE_DEFAULT
      || !(textureDesc.BindFlags & D3D11_BIND_DECODER)
      || desc->Texture2D.ArraySlice >= textureDesc.ArraySize)
@@ -502,18 +580,25 @@ namespace dxvk {
 
 
   UINT STDMETHODCALLTYPE D3D11VideoDevice::GetVideoDecoderProfileCount() {
-    return DxvkH264Decoder::supports(m_device->GetDXVKDevice().ptr()) ? 1u : 0u;
+    return std::count_if(std::begin(profiles), std::end(profiles), [&] (const DecoderProfile& profile) {
+      return DxvkVideoDecoder::supports(m_device->GetDXVKDevice().ptr(), profile.codec);
+    });
   }
 
 
   HRESULT STDMETHODCALLTYPE D3D11VideoDevice::GetVideoDecoderProfile(
           UINT  index,
           GUID* profile) {
-    if (!profile || index >= GetVideoDecoderProfileCount())
+    if (!profile)
       return E_INVALIDARG;
 
-    *profile = H264Profile;
-    return S_OK;
+    for (const auto& entry : profiles) {
+      if (DxvkVideoDecoder::supports(m_device->GetDXVKDevice().ptr(), entry.codec) && !index--) {
+        *profile = entry.guid;
+        return S_OK;
+      }
+    }
+    return E_INVALIDARG;
   }
 
 
@@ -526,10 +611,11 @@ namespace dxvk {
 
     *supported = FALSE;
 
-    if (!profile || *profile != H264Profile || !DxvkH264Decoder::supports(m_device->GetDXVKDevice().ptr()))
+    const auto* entry = profile ? findProfile(m_device, *profile) : nullptr;
+    if (!entry)
       return E_INVALIDARG;
 
-    *supported = format == DXGI_FORMAT_NV12;
+    *supported = format == entry->format;
     return S_OK;
   }
 
@@ -540,7 +626,8 @@ namespace dxvk {
     if (!desc || !count)
       return E_INVALIDARG;
 
-    *count = supportsH264Desc(m_device, *desc) ? 1u : 0u;
+    VkExtent2D extent;
+    *count = findConfig(m_device, *desc, extent) ? 1u : 0u;
     return S_OK;
   }
 
@@ -549,14 +636,16 @@ namespace dxvk {
     const D3D11_VIDEO_DECODER_DESC*   desc,
           UINT                       index,
           D3D11_VIDEO_DECODER_CONFIG* config) {
-    if (!desc || !config || index || !supportsH264Desc(m_device, *desc))
+    VkExtent2D extent;
+    const auto* profile = desc ? findConfig(m_device, *desc, extent) : nullptr;
+    if (!profile || !config || index)
       return E_INVALIDARG;
 
     *config = { };
     config->guidConfigBitstreamEncryption = NoEncryption;
     config->guidConfigMBcontrolEncryption = NoEncryption;
     config->guidConfigResidDiffEncryption = NoEncryption;
-    config->ConfigBitstreamRaw = 2u;
+    config->ConfigBitstreamRaw = profile->rawBitstream;
     config->ConfigResidDiffAccelerator = 1u;
     config->ConfigHostInverseScan = 1u;
     config->ConfigSpecificIDCT = 2u;
@@ -621,7 +710,7 @@ namespace dxvk {
 
     Com<D3D11VideoDecoder, false> videoDecoder = static_cast<D3D11VideoDecoder*>(decoder);
     Com<D3D11VideoDecoderOutputView> output;
-    DxvkH264PictureParameters params = { };
+    PictureParameters params;
     std::vector<uint8_t> bytes;
 
     try {

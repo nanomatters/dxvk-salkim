@@ -7,7 +7,7 @@
 
 #include "dxvk_device.h"
 #include "dxvk_context.h"
-#include "dxvk_h264.h"
+#include "dxvk_video_decoder.h"
 
 namespace dxvk {
   
@@ -546,8 +546,8 @@ namespace dxvk {
   }
   
   
-  void DxvkContext::copyH264Frame(
-    const DxvkH264DecodedFrame& frame,
+  void DxvkContext::copyVideoFrame(
+    const DxvkDecodedFrame& frame,
     const Rc<DxvkImage>&        dstImage,
           uint32_t              dstLayer,
           VkExtent2D            extent) {

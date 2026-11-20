@@ -57,6 +57,7 @@ d3d11_src = [
   'd3d11_util.cpp',
   'd3d11_video.cpp',
   'd3d11_video_h264.cpp',
+  'd3d11_video_hevc.cpp',
   'd3d11_view_dsv.cpp',
   'd3d11_view_rtv.cpp',
   'd3d11_view_srv.cpp',

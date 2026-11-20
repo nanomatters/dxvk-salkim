@@ -7,6 +7,7 @@
 #include "dxvk_device_info.h"
 #include "dxvk_instance.h"
 #include "dxvk_limits.h"
+#include "dxvk_util.h"
 
 namespace dxvk {
 
@@ -73,6 +74,7 @@ namespace dxvk {
     HANDLE_EXT(khrVideoQueue);                     \
     HANDLE_EXT(khrVideoDecodeQueue);               \
     HANDLE_EXT(khrVideoDecodeH264);                \
+    HANDLE_EXT(khrVideoDecodeH265);                \
     HANDLE_EXT(khrWin32KeyedMutex);                \
     HANDLE_EXT(amdBufferMarker);                   \
     HANDLE_EXT(amdMixedAttachmentSamples);         \
@@ -126,19 +128,19 @@ namespace dxvk {
     const bool queryVideo = enableVideoDecode && !deviceInfo && !safeMode
       && m_featuresSupported.khrVideoQueue
       && m_featuresSupported.khrVideoDecodeQueue
-      && m_featuresSupported.khrVideoDecodeH264
+      && (m_featuresSupported.khrVideoDecodeH264 || m_featuresSupported.khrVideoDecodeH265)
       && vk->vkGetPhysicalDeviceVideoCapabilitiesKHR
       && vk->vkGetPhysicalDeviceVideoFormatPropertiesKHR;
 
     initQueueProperties(instance, adapter, deviceInfo, queryVideo);
 
     if (queryVideo)
-      initH264Decode(instance, adapter);
+      initVideoDecode(instance, adapter);
 
-    const bool videoDecode = m_queueMapping.videoDecode.family != VK_QUEUE_FAMILY_IGNORED;
-    m_featuresSupported.khrVideoQueue = videoDecode;
-    m_featuresSupported.khrVideoDecodeQueue = videoDecode;
-    m_featuresSupported.khrVideoDecodeH264 = videoDecode;
+    m_featuresSupported.khrVideoDecodeH264 = m_queueMapping.videoDecode.family != VK_QUEUE_FAMILY_IGNORED;
+    m_featuresSupported.khrVideoDecodeH265 = m_queueMapping.hevcDecode.family != VK_QUEUE_FAMILY_IGNORED;
+    m_featuresSupported.khrVideoQueue = m_featuresSupported.khrVideoDecodeH264 || m_featuresSupported.khrVideoDecodeH265;
+    m_featuresSupported.khrVideoDecodeQueue = m_featuresSupported.khrVideoQueue;
 
     initMemoryProperties(instance, adapter);
 
@@ -243,19 +245,20 @@ namespace dxvk {
            << "  Transfer : (" << m_queueMapping.transfer.family << ", " << m_queueMapping.transfer.index << ")" << std::endl
            << "  Sparse   : (" << m_queueMapping.sparse.family   << ", " << m_queueMapping.sparse.index   << ")" << std::endl;
 
-    if (m_queueMapping.videoDecode.family != VK_QUEUE_FAMILY_IGNORED) {
-      const auto& queue = m_queueMapping.videoDecode;
-      const auto& decode = m_properties.h264Decode;
-      const auto& caps = decode.capabilities;
-      stream << "  Video    : (" << queue.family << ", " << queue.index << ")" << std::endl
-             << "  H.264 High progressive NV12: "
+    auto logDecodeProfile = [&] (const char* name, const DxvkDeviceQueueIndex& queue, const DxvkVideoDecodeInfo& info) {
+      if (info.outputFormat.format == VK_FORMAT_UNDEFINED)
+        return;
+
+      const auto& caps = info.capabilities;
+      stream << "  " << name << " on queue (" << queue.family << ", " << queue.index << "): "
              << caps.minCodedExtent.width << "x" << caps.minCodedExtent.height << " to "
              << caps.maxCodedExtent.width << "x" << caps.maxCodedExtent.height
-             << ", " << caps.maxActiveReferencePictures << " references in " << caps.maxDpbSlots << " DPB slots"
-             << (decode.distinctOutput ? ", separate output" : ", shared output") << std::endl
-             << "  Video bitstream alignment (offset/size): "
-             << caps.minBitstreamBufferOffsetAlignment << "/" << caps.minBitstreamBufferSizeAlignment << std::endl;
-    }
+             << ", " << caps.maxActiveReferencePictures << " references in " << caps.maxDpbSlots << " DPB slots" << std::endl;
+    };
+
+    logDecodeProfile("H.264 High progressive NV12", m_queueMapping.videoDecode, m_properties.h264Decode);
+    logDecodeProfile("HEVC Main NV12", m_queueMapping.hevcDecode, m_properties.hevcDecode[0]);
+    logDecodeProfile("HEVC Main 10 P010", m_queueMapping.hevcDecode, m_properties.hevcDecode[1]);
 
     // Log memory type and heap properties
     static const std::array<std::pair<VkMemoryPropertyFlagBits, const char*>, 8> s_flags = {{
@@ -521,44 +524,24 @@ namespace dxvk {
   }
 
 
-  void DxvkDeviceCapabilities::initH264Decode(
-    const DxvkInstance&               instance,
-          VkPhysicalDevice            adapter) {
-    auto queue = std::find_if(m_queuesAvailable.begin(), m_queuesAvailable.end(),
-      [] (const DxvkDeviceQueueInfo& info) {
-        const auto& props = info.core.queueFamilyProperties;
-        return props.queueCount
-            && (props.queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR)
-            && (info.video.videoCodecOperations & VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR);
-      });
-
-    if (queue == m_queuesAvailable.end())
-      return;
-
-    VkVideoDecodeH264ProfileInfoKHR h264Profile = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_PROFILE_INFO_KHR };
-    h264Profile.stdProfileIdc = STD_VIDEO_H264_PROFILE_IDC_HIGH;
-    h264Profile.pictureLayout = VK_VIDEO_DECODE_H264_PICTURE_LAYOUT_PROGRESSIVE_KHR;
-
-    VkVideoProfileInfoKHR profile = { VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR, &h264Profile };
-    profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR;
-    profile.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
-    profile.lumaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
-    profile.chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
-
-    VkVideoDecodeH264CapabilitiesKHR h264Caps = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_CAPABILITIES_KHR };
-    VkVideoDecodeCapabilitiesKHR decodeCaps = { VK_STRUCTURE_TYPE_VIDEO_DECODE_CAPABILITIES_KHR, &h264Caps };
-    VkVideoCapabilitiesKHR caps = { VK_STRUCTURE_TYPE_VIDEO_CAPABILITIES_KHR, &decodeCaps };
+  static bool queryDecodeProfile(
+    const DxvkInstance& instance, VkPhysicalDevice adapter, const VkVideoProfileInfoKHR& profile,
+    VkFormat outputFormat, const VkExtensionProperties& header, void* codecCaps, DxvkVideoDecodeInfo& result) {
     auto vk = instance.vki();
-
+    VkVideoDecodeCapabilitiesKHR decodeCaps = { VK_STRUCTURE_TYPE_VIDEO_DECODE_CAPABILITIES_KHR, codecCaps };
+    VkVideoCapabilitiesKHR caps = { VK_STRUCTURE_TYPE_VIDEO_CAPABILITIES_KHR, &decodeCaps };
     if (vk->vkGetPhysicalDeviceVideoCapabilitiesKHR(adapter, &profile, &caps) != VK_SUCCESS
-     || !caps.maxActiveReferencePictures || !caps.maxDpbSlots)
-      return;
+     || !(decodeCaps.flags & VK_VIDEO_DECODE_CAPABILITY_DPB_AND_OUTPUT_DISTINCT_BIT_KHR)
+     || !caps.maxActiveReferencePictures || caps.maxDpbSlots < 2
+     || caps.stdHeaderVersion.specVersion < header.specVersion
+     || std::strcmp(caps.stdHeaderVersion.extensionName, header.extensionName))
+      return false;
 
     VkVideoProfileListInfoKHR profiles = { VK_STRUCTURE_TYPE_VIDEO_PROFILE_LIST_INFO_KHR };
     profiles.profileCount = 1u;
     profiles.pProfiles = &profile;
 
-    auto findFormat = [&] (VkImageUsageFlags usage, VkFormat requiredFormat) -> VkVideoFormatPropertiesKHR {
+    auto findFormat = [&] (VkImageUsageFlags usage, VkFormat requiredFormat, VkImageFormatProperties& limits) -> VkVideoFormatPropertiesKHR {
       VkPhysicalDeviceVideoFormatInfoKHR info = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_FORMAT_INFO_KHR, &profiles };
       info.imageUsage = usage;
 
@@ -573,32 +556,108 @@ namespace dxvk {
 
       for (uint32_t i = 0u; i < count; i++) {
         const auto& format = formats[i];
-        if (format.format != VK_FORMAT_UNDEFINED
-         && (requiredFormat == VK_FORMAT_UNDEFINED || format.format == requiredFormat)
-         && format.imageType == VK_IMAGE_TYPE_2D && format.imageTiling == VK_IMAGE_TILING_OPTIMAL)
+        if (format.format == VK_FORMAT_UNDEFINED || (requiredFormat != VK_FORMAT_UNDEFINED && requiredFormat != format.format)
+         || format.imageType != VK_IMAGE_TYPE_2D || format.imageTiling != VK_IMAGE_TILING_OPTIMAL
+         || (format.imageUsageFlags & usage) != usage)
+          continue;
+
+        // The graphics copy preserves the bytes in each plane, including chroma order.
+        if (requiredFormat != VK_FORMAT_UNDEFINED && !util::isIdentityMapping(format.componentMapping))
+          continue;
+
+        VkPhysicalDeviceImageFormatInfo2 image = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2, &profiles };
+        image.format = format.format;
+        image.type = format.imageType;
+        image.tiling = format.imageTiling;
+        image.usage = usage;
+        VkImageFormatProperties2 props = { VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2 };
+        if (vk->vkGetPhysicalDeviceImageFormatProperties2(adapter, &image, &props) == VK_SUCCESS
+         && (props.imageFormatProperties.sampleCounts & VK_SAMPLE_COUNT_1_BIT)
+         && (!(usage & VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR) || props.imageFormatProperties.maxArrayLayers >= 2)) {
+          limits = props.imageFormatProperties;
           return format;
+        }
       }
 
       return { };
     };
 
-    // Decode into a private NV12 image that can be copied to the D3D11 texture.
-    VkImageUsageFlags outputUsage = VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    const bool distinctOutput = decodeCaps.flags & VK_VIDEO_DECODE_CAPABILITY_DPB_AND_OUTPUT_DISTINCT_BIT_KHR;
-    if (!distinctOutput)
-      outputUsage |= VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR;
+    // The public planar D3D11 texture is separate from the video images and
+    // must accept the same transfer and view flags as D3D11CommonTexture.
+    VkPhysicalDeviceImageFormatInfo2 target = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2 };
+    target.format = outputFormat;
+    target.type = VK_IMAGE_TYPE_2D;
+    target.tiling = VK_IMAGE_TILING_OPTIMAL;
+    target.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    target.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
+    VkImageFormatProperties2 targetLimits = { VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2 };
+    if (vk->vkGetPhysicalDeviceImageFormatProperties2(adapter, &target, &targetLimits) != VK_SUCCESS)
+      return false;
 
-    auto output = findFormat(outputUsage, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM);
-    if (output.format == VK_FORMAT_UNDEFINED)
-      return;
+    VkImageFormatProperties outputLimits = { }, dpbLimits = { };
+    auto output = findFormat(VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, outputFormat, outputLimits);
+    auto references = findFormat(VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR, VK_FORMAT_UNDEFINED, dpbLimits);
+    if (output.format == VK_FORMAT_UNDEFINED || references.format == VK_FORMAT_UNDEFINED)
+      return false;
 
-    auto references = distinctOutput ? findFormat(VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR, VK_FORMAT_UNDEFINED) : output;
-    if (references.format == VK_FORMAT_UNDEFINED)
-      return;
+    caps.maxCodedExtent.width = std::min({ caps.maxCodedExtent.width, outputLimits.maxExtent.width, dpbLimits.maxExtent.width, targetLimits.imageFormatProperties.maxExtent.width });
+    caps.maxCodedExtent.height = std::min({ caps.maxCodedExtent.height, outputLimits.maxExtent.height, dpbLimits.maxExtent.height, targetLimits.imageFormatProperties.maxExtent.height });
+    caps.maxDpbSlots = std::min(caps.maxDpbSlots, dpbLimits.maxArrayLayers);
+    if (caps.maxCodedExtent.width < caps.minCodedExtent.width || caps.maxCodedExtent.height < caps.minCodedExtent.height)
+      return false;
 
     caps.pNext = nullptr;
-    m_properties.h264Decode = { caps, output, references, h264Caps.maxLevelIdc, distinctOutput };
-    m_queueMapping.videoDecode.family = uint32_t(queue - m_queuesAvailable.begin());
+    result = { caps, output, references };
+    return true;
+  }
+
+
+  void DxvkDeviceCapabilities::initVideoDecode(const DxvkInstance& instance, VkPhysicalDevice adapter) {
+    auto findDecodeQueue = [&] (VkVideoCodecOperationFlagBitsKHR codec) {
+      for (uint32_t i = 0; i < m_queuesAvailable.size(); i++) {
+        const auto& queue = m_queuesAvailable[i];
+        const auto& props = queue.core.queueFamilyProperties;
+        if (props.queueCount && (props.queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR) && (queue.video.videoCodecOperations & codec))
+          return i;
+      }
+      return uint32_t(VK_QUEUE_FAMILY_IGNORED);
+    };
+
+    VkVideoProfileInfoKHR profile = { VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR };
+    profile.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
+    profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR;
+    uint32_t family = findDecodeQueue(profile.videoCodecOperation);
+    if (m_featuresSupported.khrVideoDecodeH264 && family != VK_QUEUE_FAMILY_IGNORED) {
+      VkVideoDecodeH264ProfileInfoKHR h264 = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_PROFILE_INFO_KHR };
+      h264.stdProfileIdc = STD_VIDEO_H264_PROFILE_IDC_HIGH;
+      h264.pictureLayout = VK_VIDEO_DECODE_H264_PICTURE_LAYOUT_PROGRESSIVE_KHR;
+      profile.pNext = &h264;
+      profile.lumaBitDepth = profile.chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+      VkVideoDecodeH264CapabilitiesKHR caps = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_CAPABILITIES_KHR };
+      if (queryDecodeProfile(instance, adapter, profile, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+          DxvkH264DecodeInfo::HeaderVersion, &caps, m_properties.h264Decode)) {
+        m_properties.h264Decode.maxLevelIdc = caps.maxLevelIdc;
+        m_queueMapping.videoDecode.family = family;
+      }
+    }
+
+    profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H265_BIT_KHR;
+    family = findDecodeQueue(profile.videoCodecOperation);
+    if (!m_featuresSupported.khrVideoDecodeH265 || family == VK_QUEUE_FAMILY_IGNORED)
+      return;
+
+    for (uint32_t i = 0; i < m_properties.hevcDecode.size(); i++) {
+      VkVideoDecodeH265ProfileInfoKHR hevc = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H265_PROFILE_INFO_KHR };
+      hevc.stdProfileIdc = i ? STD_VIDEO_H265_PROFILE_IDC_MAIN_10 : STD_VIDEO_H265_PROFILE_IDC_MAIN;
+      profile.pNext = &hevc;
+      profile.lumaBitDepth = profile.chromaBitDepth = i ? VK_VIDEO_COMPONENT_BIT_DEPTH_10_BIT_KHR : VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+      VkFormat format = i ? VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16 : VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+      VkVideoDecodeH265CapabilitiesKHR caps = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H265_CAPABILITIES_KHR };
+      if (queryDecodeProfile(instance, adapter, profile, format, DxvkH265DecodeInfo::HeaderVersion, &caps, m_properties.hevcDecode[i])) {
+        m_properties.hevcDecode[i].maxLevelIdc = caps.maxLevelIdc;
+        m_queueMapping.hevcDecode.family = family;
+      }
+    }
   }
 
 
@@ -854,6 +913,7 @@ namespace dxvk {
     enableQueue(m_queueMapping.transfer);
     enableQueue(m_queueMapping.sparse);
     enableQueue(m_queueMapping.videoDecode);
+    enableQueue(m_queueMapping.hevcDecode);
 
     // Fix up queue priority pointers
     uint32_t maxQueueCount = 0u;
@@ -1237,6 +1297,7 @@ namespace dxvk {
       ENABLE_EXT(khrVideoQueue, false),
       ENABLE_EXT(khrVideoDecodeQueue, false),
       ENABLE_EXT(khrVideoDecodeH264, false),
+      ENABLE_EXT(khrVideoDecodeH265, false),
 
       /* Keyed mutex support in wine */
       ENABLE_EXT(khrWin32KeyedMutex, false),

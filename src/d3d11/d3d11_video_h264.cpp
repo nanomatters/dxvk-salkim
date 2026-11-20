@@ -1,4 +1,5 @@
 #include "d3d11_video_h264.h"
+#include "d3d11_video_rbsp.h"
 
 #include <algorithm>
 #include <cstring>
@@ -78,77 +79,6 @@ namespace dxvk {
     }
 
 
-    class H264RbspReader {
-
-    public:
-
-      H264RbspReader(const uint8_t* begin, const uint8_t* end)
-      : m_current(begin), m_end(end) { }
-
-      bool valid() const {
-        return !m_failed;
-      }
-
-      uint32_t readBits(uint32_t count) {
-        uint32_t value = 0;
-
-        for (; count && !m_failed; count--) {
-          if (!m_bitsLeft && !readByte())
-            break;
-
-          value = (value << 1) | ((m_byte >> --m_bitsLeft) & 1u);
-        }
-
-        return value;
-      }
-
-      uint32_t readUe() {
-        uint32_t leadingZeroes = 0;
-
-        while (valid() && !readBits(1)) {
-          if (++leadingZeroes >= 32) {
-            m_failed = true;
-            return 0;
-          }
-        }
-
-        return ((1u << leadingZeroes) - 1u) + readBits(leadingZeroes);
-      }
-
-    private:
-
-      const uint8_t* m_current;
-      const uint8_t* m_end;
-      uint8_t m_byte = 0;
-      uint32_t m_bitsLeft = 0;
-      uint32_t m_zeroBytes = 0;
-      bool m_failed = false;
-
-      bool readByte() {
-        if (m_current == m_end) {
-          m_failed = true;
-          return false;
-        }
-
-        if (m_zeroBytes == 2 && *m_current == 3) {
-          m_current++;
-          m_zeroBytes = 0;
-
-          if (m_current == m_end || *m_current > 3) {
-            m_failed = true;
-            return false;
-          }
-        }
-
-        m_byte = *m_current++;
-        m_bitsLeft = 8;
-        m_zeroBytes = m_byte ? 0 : std::min(m_zeroBytes + 1, 2u);
-        return true;
-      }
-
-    };
-
-
     struct H264SliceHeader {
       uint32_t firstMb;
       uint32_t ppsId;
@@ -160,7 +90,7 @@ namespace dxvk {
     };
 
 
-    bool skipH264ReferenceListModification(H264RbspReader& reader, uint32_t refCount) {
+    bool skipH264ReferenceListModification(VideoRbspReader& reader, uint32_t refCount) {
       if (!reader.readBits(1))
         return reader.valid();
 
@@ -179,7 +109,7 @@ namespace dxvk {
     }
 
 
-    bool skipH264PredictionWeights(H264RbspReader& reader, uint32_t refCountL0, uint32_t refCountL1) {
+    bool skipH264PredictionWeights(VideoRbspReader& reader, uint32_t refCountL0, uint32_t refCountL1) {
       if (reader.readUe() > 7 || reader.readUe() > 7)
         return false;
 
@@ -203,7 +133,7 @@ namespace dxvk {
     }
 
 
-    bool parseH264ReferenceMarking(H264RbspReader& reader, H264SliceHeader& header) {
+    bool parseH264ReferenceMarking(VideoRbspReader& reader, H264SliceHeader& header) {
       if (header.isIdr) {
         reader.readBits(1); // no_output_of_prior_pics_flag
         header.isLongTerm = reader.readBits(1);
@@ -254,7 +184,7 @@ namespace dxvk {
       if ((nalType != 1 && nalType != 5) || isReference != bool(params.RefPicFlag))
         return false;
 
-      H264RbspReader reader(data + 4, data + size);
+      VideoRbspReader reader(data + 4, data + size);
       header.firstMb = reader.readUe();
       const uint32_t sliceType = reader.readUe();
       const uint32_t sliceClass = sliceType % 5;

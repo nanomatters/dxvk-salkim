@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -12,12 +13,26 @@ namespace dxvk {
 
   class DxvkInstance;
 
-  struct DxvkH264DecodeInfo {
+  struct DxvkVideoDecodeInfo {
     VkVideoCapabilitiesKHR     capabilities = { VK_STRUCTURE_TYPE_VIDEO_CAPABILITIES_KHR };
     VkVideoFormatPropertiesKHR outputFormat = { };
     VkVideoFormatPropertiesKHR referenceFormat = { };
-    StdVideoH264LevelIdc       maxLevelIdc = STD_VIDEO_H264_LEVEL_IDC_INVALID;
-    bool                       distinctOutput = false;
+  };
+
+  struct DxvkH264DecodeInfo : DxvkVideoDecodeInfo {
+    static constexpr VkExtensionProperties HeaderVersion = {
+      VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_EXTENSION_NAME,
+      VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_API_VERSION_1_0_0,
+    };
+    StdVideoH264LevelIdc maxLevelIdc = STD_VIDEO_H264_LEVEL_IDC_INVALID;
+  };
+
+  struct DxvkH265DecodeInfo : DxvkVideoDecodeInfo {
+    static constexpr VkExtensionProperties HeaderVersion = {
+      VK_STD_VULKAN_VIDEO_CODEC_H265_DECODE_EXTENSION_NAME,
+      VK_STD_VULKAN_VIDEO_CODEC_H265_DECODE_API_VERSION_1_0_0,
+    };
+    StdVideoH265LevelIdc maxLevelIdc = STD_VIDEO_H265_LEVEL_IDC_INVALID;
   };
 
   /**
@@ -31,6 +46,7 @@ namespace dxvk {
   struct DxvkDeviceInfo {
     Version                                                   driverVersion = { };
     DxvkH264DecodeInfo                                        h264Decode = { };
+    std::array<DxvkH265DecodeInfo, 2>                         hevcDecode = { };
     VkPhysicalDeviceProperties2                               core                            = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
     VkPhysicalDeviceVulkan11Properties                        vk11                            = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES };
     VkPhysicalDeviceVulkan12Properties                        vk12                            = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES };
@@ -125,6 +141,7 @@ namespace dxvk {
     VkBool32                                                  khrVideoQueue                   = VK_FALSE;
     VkBool32                                                  khrVideoDecodeQueue             = VK_FALSE;
     VkBool32                                                  khrVideoDecodeH264              = VK_FALSE;
+    VkBool32                                                  khrVideoDecodeH265              = VK_FALSE;
     VkBool32                                                  khrSwapchainMutableFormat       = VK_FALSE;
     VkBool32                                                  khrWin32KeyedMutex              = VK_FALSE;
     VkBool32                                                  amdBufferMarker                 = VK_FALSE;
@@ -209,6 +226,7 @@ namespace dxvk {
     VkExtensionProperties khrVideoQueue                     = vk::makeExtension(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
     VkExtensionProperties khrVideoDecodeQueue               = vk::makeExtension(VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME);
     VkExtensionProperties khrVideoDecodeH264                = vk::makeExtension(VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME);
+    VkExtensionProperties khrVideoDecodeH265                = vk::makeExtension(VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME);
     VkExtensionProperties khrWin32KeyedMutex                = vk::makeExtension(VK_KHR_WIN32_KEYED_MUTEX_EXTENSION_NAME);
     VkExtensionProperties amdBufferMarker                   = vk::makeExtension(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
     VkExtensionProperties amdMixedAttachmentSamples         = vk::makeExtension(VK_AMD_MIXED_ATTACHMENT_SAMPLES_EXTENSION_NAME);
@@ -249,6 +267,7 @@ namespace dxvk {
     DxvkDeviceQueueIndex transfer;
     DxvkDeviceQueueIndex sparse;
     DxvkDeviceQueueIndex videoDecode;
+    DxvkDeviceQueueIndex hevcDecode;
   };
 
 
@@ -447,7 +466,7 @@ namespace dxvk {
       const VkDeviceCreateInfo*         deviceInfo,
             bool                        queryVideo);
 
-    void initH264Decode(
+    void initVideoDecode(
       const DxvkInstance&               instance,
             VkPhysicalDevice            adapter);
 

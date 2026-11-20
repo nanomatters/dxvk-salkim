@@ -1,35 +1,42 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <variant>
 
 #include "dxvk_device.h"
-#include "dxvk_h264.h"
+#include "dxvk_video_decoder.h"
 
 namespace dxvk {
 
   namespace {
 
-    constexpr VkExtensionProperties H264HeaderVersion = {
-      VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_EXTENSION_NAME,
-      VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_API_VERSION_1_0_0,
-    };
+    const DxvkVideoDecodeInfo& getCaps(const DxvkDevice* device, DxvkVideoProfile profile) {
+      const auto& props = device->properties();
+      if (profile == DxvkVideoProfile::H264)
+        return props.h264Decode;
+      return props.hevcDecode[profile == DxvkVideoProfile::HevcMain10];
+    }
+
+    const DxvkDeviceQueue& getQueue(const DxvkDevice* device, DxvkVideoProfile profile) {
+      return profile == DxvkVideoProfile::H264 ? device->queues().videoDecode : device->queues().hevcDecode;
+    }
 
     constexpr int32_t EmptyPictureSlot = -1;
     constexpr int32_t InvalidPictureSlot = -2;
 
     void checkVideo(VkResult result, const char* operation) {
       if (result != VK_SUCCESS)
-        throw DxvkError(str::format("DxvkH264: ", operation, " failed: ", result));
+        throw DxvkError(str::format("DxvkVideoDecoder: ", operation, " failed: ", result));
     }
 
   }
 
 
-  class DxvkH264Memory {
+  class DxvkVideoMemory {
 
   public:
 
-    DxvkH264Memory(
+    DxvkVideoMemory(
             DxvkDevice*           device,
       const VkMemoryAllocateInfo& info,
             uint32_t              heap)
@@ -41,13 +48,13 @@ namespace dxvk {
       m_adapter->notifyMemoryStats(m_heap, m_size, m_size);
     }
 
-    ~DxvkH264Memory() {
+    ~DxvkVideoMemory() {
       m_vkd->vkFreeMemory(m_vkd->device(), m_memory, nullptr);
       m_adapter->notifyMemoryStats(m_heap, -m_size, -m_size);
     }
 
-    DxvkH264Memory(const DxvkH264Memory&) = delete;
-    DxvkH264Memory& operator = (const DxvkH264Memory&) = delete;
+    DxvkVideoMemory(const DxvkVideoMemory&) = delete;
+    DxvkVideoMemory& operator = (const DxvkVideoMemory&) = delete;
 
     bool isHostCoherent() const { return m_coherent; }
 
@@ -69,7 +76,7 @@ namespace dxvk {
 
   namespace {
 
-    std::unique_ptr<DxvkH264Memory> allocateVideoMemory(
+    std::unique_ptr<DxvkVideoMemory> allocateVideoMemory(
             DxvkDevice*           device,
       const VkMemoryRequirements& requirements,
             VkMemoryPropertyFlags required,
@@ -91,16 +98,16 @@ namespace dxvk {
       }
 
       if (index == memory.memoryTypeCount)
-        throw DxvkError("DxvkH264: No compatible memory type");
+        throw DxvkError("DxvkVideoDecoder: No compatible memory type");
 
       if (requirements.size > VkDeviceSize(std::numeric_limits<int64_t>::max()))
-        throw DxvkError("DxvkH264: Invalid memory allocation size");
+        throw DxvkError("DxvkVideoDecoder: Invalid memory allocation size");
 
       VkMemoryAllocateInfo info = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, next };
       info.allocationSize = requirements.size;
       info.memoryTypeIndex = index;
 
-      return std::make_unique<DxvkH264Memory>(device, info, memory.memoryTypes[index].heapIndex);
+      return std::make_unique<DxvkVideoMemory>(device, info, memory.memoryTypes[index].heapIndex);
     }
 
     struct VideoBitstream {
@@ -118,7 +125,7 @@ namespace dxvk {
       VkBuffer buffer = VK_NULL_HANDLE;
       VkDeviceSize capacity = 0;
       void* mapped = nullptr;
-      std::unique_ptr<DxvkH264Memory> memory;
+      std::unique_ptr<DxvkVideoMemory> memory;
     };
 
     VkImageMemoryBarrier2 videoBarrier(
@@ -145,12 +152,14 @@ namespace dxvk {
   }
 
 
-  struct DxvkH264Decoder::Submission {
+  struct DxvkVideoDecoder::Submission {
     explicit Submission(const Rc<vk::DeviceFn>& vkd) : vk(vkd) { }
 
-    void setParameters(VkVideoSessionKHR session, const DxvkH264PictureParameters& params);
+    void setParameters(VkVideoSessionKHR session, const DxvkH264SessionParameters& params);
+    void setParameters(VkVideoSessionKHR session, const DxvkH265SessionParameters& params);
+    void createParameters(VkVideoSessionKHR session, const void* codecInfo);
     VkDeviceSize uploadBitstream(DxvkDevice* device, const VkVideoProfileListInfoKHR& profiles,
-      const std::vector<uint8_t>& bytes);
+      VkDeviceSize alignment, const std::vector<uint8_t>& bytes);
 
     VkResult wait() const {
       if (!pending)
@@ -179,25 +188,20 @@ namespace dxvk {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
     bool pending = false;
-    Rc<DxvkH264Image> dpb;
-    Rc<DxvkH264Image> output;
+    Rc<DxvkVideoImage> dpb;
+    Rc<DxvkVideoImage> output;
     Rc<DxvkImage> image;
     std::unique_ptr<VideoBitstream> bitstream;
     VkVideoSessionParametersKHR parameters = VK_NULL_HANDLE;
-    StdVideoH264SequenceParameterSet sps = { };
-    StdVideoH264PictureParameterSet pps = { };
-    StdVideoH264ScalingLists scalingLists = { };
+    std::variant<std::monostate, DxvkH264SessionParameters, DxvkH265SessionParameters> cached;
   };
 
 
-  void DxvkH264Decoder::Submission::setParameters(
+  void DxvkVideoDecoder::Submission::setParameters(
           VkVideoSessionKHR          session,
-    const DxvkH264PictureParameters& params) {
-    // The translator leaves optional pointers null and supplies the PPS scaling
-    // lists separately. Compare their contents before fixing up the Vulkan PPS.
-    if (parameters && !std::memcmp(&sps, &params.sps, sizeof(sps))
-     && !std::memcmp(&pps, &params.pps, sizeof(pps))
-     && !std::memcmp(&scalingLists, &params.scalingLists, sizeof(scalingLists)))
+    const DxvkH264SessionParameters& params) {
+    const auto* prev = std::get_if<DxvkH264SessionParameters>(&cached);
+    if (prev && !std::memcmp(prev, &params, sizeof(params)))
       return;
 
     auto vkPps = params.pps;
@@ -215,7 +219,54 @@ namespace dxvk {
     h264Parameters.maxStdPPSCount = 1;
     h264Parameters.pParametersAddInfo = &add;
 
-    VkVideoSessionParametersCreateInfoKHR parameterInfo = { VK_STRUCTURE_TYPE_VIDEO_SESSION_PARAMETERS_CREATE_INFO_KHR, &h264Parameters };
+    createParameters(session, &h264Parameters);
+    cached = params;
+  }
+
+
+  void DxvkVideoDecoder::Submission::setParameters(
+          VkVideoSessionKHR          session,
+    const DxvkH265SessionParameters& params) {
+    const auto* prev = std::get_if<DxvkH265SessionParameters>(&cached);
+    if (prev && !std::memcmp(prev, &params, sizeof(params)))
+      return;
+
+    auto vps = params.vps;
+    auto sps = params.sps;
+    vps.pDecPicBufMgr = &params.dpbMgr;
+    vps.pProfileTierLevel = &params.profileTierLevel;
+    sps.pDecPicBufMgr = &params.dpbMgr;
+    sps.pProfileTierLevel = &params.profileTierLevel;
+    // Translation accepts a declared short-term table only if no slice uses it.
+    static constexpr StdVideoH265ShortTermRefPicSet emptyShortTermRefs[STD_VIDEO_H265_MAX_SHORT_TERM_REF_PIC_SETS] = { };
+    if (sps.num_short_term_ref_pic_sets)
+      sps.pShortTermRefPicSet = emptyShortTermRefs;
+    constexpr StdVideoH265LongTermRefPicsSps emptyLongTermRefs = { };
+    if (sps.flags.long_term_ref_pics_present_flag)
+      sps.pLongTermRefPicsSps = &emptyLongTermRefs;
+    if (sps.flags.sps_scaling_list_data_present_flag)
+      sps.pScalingLists = &params.scalingLists;
+
+    VkVideoDecodeH265SessionParametersAddInfoKHR add = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H265_SESSION_PARAMETERS_ADD_INFO_KHR };
+    add.stdVPSCount = 1;
+    add.pStdVPSs = &vps;
+    add.stdSPSCount = 1;
+    add.pStdSPSs = &sps;
+    add.stdPPSCount = 1;
+    add.pStdPPSs = &params.pps;
+
+    VkVideoDecodeH265SessionParametersCreateInfoKHR info = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H265_SESSION_PARAMETERS_CREATE_INFO_KHR };
+    info.maxStdVPSCount = 1;
+    info.maxStdSPSCount = 1;
+    info.maxStdPPSCount = 1;
+    info.pParametersAddInfo = &add;
+    createParameters(session, &info);
+    cached = params;
+  }
+
+
+  void DxvkVideoDecoder::Submission::createParameters(VkVideoSessionKHR session, const void* codecInfo) {
+    VkVideoSessionParametersCreateInfoKHR parameterInfo = { VK_STRUCTURE_TYPE_VIDEO_SESSION_PARAMETERS_CREATE_INFO_KHR, codecInfo };
     parameterInfo.videoSession = session;
 
     if (parameters)
@@ -223,21 +274,18 @@ namespace dxvk {
     parameters = VK_NULL_HANDLE;
     checkVideo(vk->vkCreateVideoSessionParametersKHR(vk->device(), &parameterInfo, nullptr, &parameters),
       "vkCreateVideoSessionParametersKHR");
-    sps = params.sps;
-    pps = params.pps;
-    scalingLists = params.scalingLists;
   }
 
 
-  VkDeviceSize DxvkH264Decoder::Submission::uploadBitstream(
+  VkDeviceSize DxvkVideoDecoder::Submission::uploadBitstream(
           DxvkDevice*                device,
     const VkVideoProfileListInfoKHR& profiles,
+          VkDeviceSize               alignment,
     const std::vector<uint8_t>&      bytes) {
-    const auto alignment = device->properties().h264Decode.capabilities.minBitstreamBufferSizeAlignment;
     VkDeviceSize size = align(VkDeviceSize(bytes.size()), alignment);
 
     if (size < bytes.size() || size > std::numeric_limits<size_t>::max())
-      throw DxvkError("DxvkH264: Invalid bitstream size");
+      throw DxvkError("DxvkVideoDecoder: Invalid bitstream size");
 
     if (!bitstream || bitstream->capacity < size) {
       auto upload = std::make_unique<VideoBitstream>(vk);
@@ -274,11 +322,11 @@ namespace dxvk {
   }
 
 
-  DxvkH264Image::DxvkH264Image(const Rc<vk::DeviceFn>& vkd)
+  DxvkVideoImage::DxvkVideoImage(const Rc<vk::DeviceFn>& vkd)
   : m_vkd(vkd) { }
 
 
-  DxvkH264Image::~DxvkH264Image() {
+  DxvkVideoImage::~DxvkVideoImage() {
     if (m_view)
       m_vkd->vkDestroyImageView(m_vkd->device(), m_view, nullptr);
     if (m_image)
@@ -286,8 +334,9 @@ namespace dxvk {
   }
 
 
-  DxvkH264Decoder::DxvkH264Decoder(DxvkDevice* device, VkExtent2D codedExtent)
-  : m_device(device), m_vkd(device->vkd()), m_extent(codedExtent) {
+  DxvkVideoDecoder::DxvkVideoDecoder(DxvkDevice* device, DxvkVideoProfile profile, VkExtent2D codedExtent)
+  : m_device(device), m_vkd(device->vkd()), m_codec(profile),
+    m_caps(getCaps(device, profile)), m_queue(getQueue(device, profile)), m_extent(codedExtent) {
     try {
       init();
     } catch (...) {
@@ -297,12 +346,12 @@ namespace dxvk {
   }
 
 
-  DxvkH264Decoder::~DxvkH264Decoder() {
+  DxvkVideoDecoder::~DxvkVideoDecoder() {
     destroy();
   }
 
 
-  void DxvkH264Decoder::destroy() {
+  void DxvkVideoDecoder::destroy() {
     for (auto& slot : m_submissions)
       slot.reset();
     if (m_pool)
@@ -312,14 +361,10 @@ namespace dxvk {
   }
 
 
-  bool DxvkH264Decoder::supports(const DxvkDevice* device) {
-    const auto& video = device->properties().h264Decode;
-    const auto& header = video.capabilities.stdHeaderVersion;
+  bool DxvkVideoDecoder::supports(const DxvkDevice* device, DxvkVideoProfile profile) {
+    const auto& video = getCaps(device, profile);
     const auto& vk = device->vkd();
-    return device->queues().videoDecode.queueHandle && video.distinctOutput
-        && video.capabilities.maxDpbSlots >= 2 && video.capabilities.maxActiveReferencePictures
-        && header.specVersion >= H264HeaderVersion.specVersion
-        && !std::strcmp(header.extensionName, H264HeaderVersion.extensionName)
+    return getQueue(device, profile).queueHandle && video.outputFormat.format != VK_FORMAT_UNDEFINED
         && vk->vkCreateVideoSessionKHR && vk->vkDestroyVideoSessionKHR
         && vk->vkGetVideoSessionMemoryRequirementsKHR && vk->vkBindVideoSessionMemoryKHR
         && vk->vkCreateVideoSessionParametersKHR && vk->vkDestroyVideoSessionParametersKHR
@@ -328,42 +373,49 @@ namespace dxvk {
   }
 
 
-  void DxvkH264Decoder::init() {
-    const auto& video = m_device->properties().h264Decode;
-    const auto& queue = m_device->queues().videoDecode;
-    const auto& capabilities = video.capabilities;
+  void DxvkVideoDecoder::init() {
+    const auto& capabilities = m_caps.capabilities;
 
-    if (!supports(m_device))
-      throw DxvkError("DxvkH264: Video decode is unavailable");
+    if (!supports(m_device, m_codec))
+      throw DxvkError("DxvkVideoDecoder: Video decode is unavailable");
 
-    if ((m_extent.width | m_extent.height) & 15u)
-      throw DxvkError("DxvkH264: Coded extent must be macroblock aligned");
+    if (m_codec == DxvkVideoProfile::H264 && ((m_extent.width | m_extent.height) & 15u))
+      throw DxvkError("DxvkVideoDecoder: H.264 coded extent must be macroblock aligned");
 
     if (m_extent.width < capabilities.minCodedExtent.width || m_extent.width > capabilities.maxCodedExtent.width
      || m_extent.height < capabilities.minCodedExtent.height || m_extent.height > capabilities.maxCodedExtent.height)
-      throw DxvkError("DxvkH264: Coded extent is outside device limits");
+      throw DxvkError("DxvkVideoDecoder: Coded extent is outside device limits");
 
-    m_h264Profile.stdProfileIdc = STD_VIDEO_H264_PROFILE_IDC_HIGH;
-    m_h264Profile.pictureLayout = VK_VIDEO_DECODE_H264_PICTURE_LAYOUT_PROGRESSIVE_KHR;
-    m_profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR;
+    if (m_codec == DxvkVideoProfile::H264) {
+      m_h264Profile.stdProfileIdc = STD_VIDEO_H264_PROFILE_IDC_HIGH;
+      m_h264Profile.pictureLayout = VK_VIDEO_DECODE_H264_PICTURE_LAYOUT_PROGRESSIVE_KHR;
+      m_profile.pNext = &m_h264Profile;
+      m_profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR;
+    } else {
+      m_hevcProfile.stdProfileIdc = m_codec == DxvkVideoProfile::HevcMain10
+        ? STD_VIDEO_H265_PROFILE_IDC_MAIN_10 : STD_VIDEO_H265_PROFILE_IDC_MAIN;
+      m_profile.pNext = &m_hevcProfile;
+      m_profile.videoCodecOperation = VK_VIDEO_CODEC_OPERATION_DECODE_H265_BIT_KHR;
+    }
     m_profile.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
-    m_profile.lumaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
-    m_profile.chromaBitDepth = VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+    m_profile.lumaBitDepth = m_codec == DxvkVideoProfile::HevcMain10
+      ? VK_VIDEO_COMPONENT_BIT_DEPTH_10_BIT_KHR : VK_VIDEO_COMPONENT_BIT_DEPTH_8_BIT_KHR;
+    m_profile.chromaBitDepth = m_profile.lumaBitDepth;
     m_profiles.profileCount = 1;
     m_profiles.pProfiles = &m_profile;
 
-    m_maxSlots = std::min(capabilities.maxDpbSlots, 17u);
+    m_maxSlots = std::min(capabilities.maxDpbSlots, m_codec == DxvkVideoProfile::H264 ? 17u : 16u);
     m_maxReferences = std::min(capabilities.maxActiveReferencePictures, m_maxSlots - 1u);
 
     VkVideoSessionCreateInfoKHR session = { VK_STRUCTURE_TYPE_VIDEO_SESSION_CREATE_INFO_KHR };
-    session.queueFamilyIndex = queue.queueFamily;
+    session.queueFamilyIndex = m_queue.queueFamily;
     session.pVideoProfile = &m_profile;
-    session.pictureFormat = video.outputFormat.format;
+    session.pictureFormat = m_caps.outputFormat.format;
     session.maxCodedExtent = m_extent;
-    session.referencePictureFormat = video.referenceFormat.format;
+    session.referencePictureFormat = m_caps.referenceFormat.format;
     session.maxDpbSlots = m_maxSlots;
     session.maxActiveReferencePictures = m_maxReferences;
-    session.pStdHeaderVersion = &H264HeaderVersion;
+    session.pStdHeaderVersion = m_codec == DxvkVideoProfile::H264 ? &DxvkH264DecodeInfo::HeaderVersion : &DxvkH265DecodeInfo::HeaderVersion;
     checkVideo(m_vkd->vkCreateVideoSessionKHR(m_vkd->device(), &session, nullptr, &m_session),
       "vkCreateVideoSessionKHR");
 
@@ -395,7 +447,7 @@ namespace dxvk {
 
     VkCommandPoolCreateInfo pool = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
     pool.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    pool.queueFamilyIndex = queue.queueFamily;
+    pool.queueFamilyIndex = m_queue.queueFamily;
     checkVideo(m_vkd->vkCreateCommandPool(m_vkd->device(), &pool, nullptr, &m_pool), "vkCreateCommandPool");
 
     VkCommandBufferAllocateInfo command = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
@@ -412,15 +464,15 @@ namespace dxvk {
   }
 
 
-  Rc<DxvkH264Image> DxvkH264Decoder::createImage(
+  Rc<DxvkVideoImage> DxvkVideoDecoder::createImage(
     const VkVideoFormatPropertiesKHR& format,
           VkImageUsageFlags           usage,
           uint32_t                    layers,
           bool                        graphicsAccess) {
-    Rc<DxvkH264Image> image = new DxvkH264Image(m_vkd);
+    Rc<DxvkVideoImage> image = new DxvkVideoImage(m_vkd);
 
     const auto& queues = m_device->queues();
-    const std::array<uint32_t, 2> families = { queues.videoDecode.queueFamily, queues.graphics.queueFamily };
+    const std::array<uint32_t, 2> families = { m_queue.queueFamily, queues.graphics.queueFamily };
 
     VkImageCreateInfo info = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, &m_profiles };
     info.imageType = VK_IMAGE_TYPE_2D;
@@ -460,11 +512,11 @@ namespace dxvk {
   }
 
 
-  DxvkH264DecodedFrame DxvkH264Decoder::dropPicture(const DxvkH264PictureParameters& params) {
+  DxvkDecodedFrame DxvkVideoDecoder::dropPicture(uint8_t currentPictureId, bool reset) {
     // The Vulkan slot stays active until it is explicitly recycled or reset,
     // but its old contents can no longer satisfy a reference to this ID.
     for (auto& id : m_pictureIds) {
-      if (id >= 0 && (params.picture.flags.IdrPicFlag || id == params.currentPictureId))
+      if (id >= 0 && (reset || id == currentPictureId))
         id = InvalidPictureSlot;
     }
 
@@ -472,40 +524,102 @@ namespace dxvk {
   }
 
 
-  DxvkH264DecodedFrame DxvkH264Decoder::decode(
+  struct DxvkVideoDecoder::Picture {
+    VkExtent2D extent;
+    uint32_t requiredSlots;
+    bool reset;
+    bool intra;
+    bool reference;
+    const void* codecInfo;
+    StdVideoDecodeH265PictureInfo* hevc = nullptr;
+  };
+
+
+  DxvkDecodedFrame DxvkVideoDecoder::decode(
     const DxvkH264PictureParameters& params,
     const std::vector<uint8_t>& bytes) {
-    const bool reset = !m_initialized || params.picture.flags.IdrPicFlag;
+    VkVideoDecodeH264PictureInfoKHR codecInfo = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_PICTURE_INFO_KHR };
+    codecInfo.pStdPictureInfo = &params.picture;
+    codecInfo.sliceCount = uint32_t(params.sliceOffsets.size());
+    codecInfo.pSliceOffsets = params.sliceOffsets.data();
+
+    VkVideoDecodeH264DpbSlotInfoKHR current = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_DPB_SLOT_INFO_KHR };
+    current.pStdReferenceInfo = &params.currentReference;
+    VkExtent2D extent = { (params.sps.pic_width_in_mbs_minus1 + 1u) * 16,
+                          (params.sps.pic_height_in_map_units_minus1 + 1u) * 16 };
+    if (m_codec != DxvkVideoProfile::H264 || extent.width != m_extent.width || extent.height != m_extent.height)
+      return dropPicture(params.currentPictureId, params.picture.flags.IdrPicFlag);
+
+    Picture picture = { extent, params.sps.max_num_ref_frames + 1u,
+      bool(params.picture.flags.IdrPicFlag), bool(params.picture.flags.is_intra),
+      bool(params.picture.flags.is_reference), &codecInfo };
+    return decodePicture(params, bytes, picture, current);
+  }
+
+
+  DxvkDecodedFrame DxvkVideoDecoder::decode(
+    const DxvkH265PictureParameters& params,
+    const std::vector<uint8_t>& bytes) {
+    auto stdPicture = params.picture;
+    VkVideoDecodeH265PictureInfoKHR codecInfo = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H265_PICTURE_INFO_KHR };
+    codecInfo.pStdPictureInfo = &stdPicture;
+    codecInfo.sliceSegmentCount = uint32_t(params.sliceOffsets.size());
+    codecInfo.pSliceSegmentOffsets = params.sliceOffsets.data();
+
+    VkVideoDecodeH265DpbSlotInfoKHR current = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H265_DPB_SLOT_INFO_KHR };
+    current.pStdReferenceInfo = &params.currentReference;
+    VkExtent2D extent = { params.sps.pic_width_in_luma_samples, params.sps.pic_height_in_luma_samples };
+    if (m_codec == DxvkVideoProfile::H264
+     || extent.width > m_extent.width || extent.height > m_extent.height
+     || extent.width < m_caps.capabilities.minCodedExtent.width || extent.height < m_caps.capabilities.minCodedExtent.height
+     || params.profileTierLevel.general_profile_idc != m_hevcProfile.stdProfileIdc)
+      return dropPicture(params.currentPictureId, stdPicture.flags.IdrPicFlag);
+
+    // References belong to the coded sequence that produced them. Reusing a
+    // D3D11 decoder for a smaller sequence must not rebind them at a new extent.
+    bool resized = m_initialized && (extent.width != m_dpbExtent.width || extent.height != m_dpbExtent.height);
+    if (resized && !stdPicture.flags.IrapPicFlag)
+      return dropPicture(params.currentPictureId, false);
+
+    Picture picture = { extent, params.dpbMgr.max_dec_pic_buffering_minus1[0] + 1u,
+      bool(stdPicture.flags.IdrPicFlag) || resized, bool(stdPicture.flags.IrapPicFlag),
+      bool(stdPicture.flags.IsReference), &codecInfo, &stdPicture };
+    return decodePicture(params, bytes, picture, current);
+  }
+
+
+  template<typename Parameters, typename SlotInfo>
+  DxvkDecodedFrame DxvkVideoDecoder::decodePicture(
+    const Parameters& params, const std::vector<uint8_t>& bytes,
+    const Picture& picture, const SlotInfo& currentInfo) {
+    const bool reset = !m_initialized || picture.reset;
     if (bytes.empty() || params.sliceOffsets.empty()
      || params.referenceCount > m_maxReferences || params.referenceCount > params.references.size()
-     || (!m_initialized && !params.picture.flags.is_intra)
-     || (params.referenceCount && reset)
-     || params.sps.pic_width_in_mbs_minus1 + 1u != m_extent.width / 16u
-     || params.sps.pic_height_in_map_units_minus1 + 1u != m_extent.height / 16u)
-      return dropPicture(params);
+     || (!m_initialized && !picture.intra) || (params.referenceCount && reset))
+      return dropPicture(params.currentPictureId, picture.reset);
 
-    // The active SPS stays fixed within a coded video sequence. Grow a layered
-    // DPB only when starting or resetting a sequence, when no references survive.
+    // A same-size HEVC random access picture with no surviving references
+    // can replace the DPB without resetting the video session.
     const uint32_t allocatedSlots = uint32_t(m_pictureIds.size());
-    const uint32_t requiredSlots = std::min(m_maxSlots, uint32_t(params.sps.max_num_ref_frames) + 1u);
-    const uint32_t slotCount = reset ? std::max(allocatedSlots, requiredSlots) : allocatedSlots;
+    const uint32_t requiredSlots = std::min(m_maxSlots, picture.requiredSlots);
+    const bool canGrow = reset || (picture.hevc && picture.intra && !params.referenceCount);
+    const uint32_t slotCount = canGrow ? std::max(allocatedSlots, requiredSlots) : allocatedSlots;
     if (params.referenceCount >= slotCount)
-      return dropPicture(params);
+      return dropPicture(params.currentPictureId, picture.reset);
 
-    const auto& video = m_device->properties().h264Decode;
     const bool replaceDpb = slotCount > allocatedSlots;
     auto dpb = replaceDpb
-      ? createImage(video.referenceFormat, VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR, slotCount, false)
+      ? createImage(m_caps.referenceFormat, VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR, slotCount, false)
       : m_dpb;
-    std::vector<int32_t> pictureIds = reset ? std::vector<int32_t>(slotCount, EmptyPictureSlot) : m_pictureIds;
+    std::vector<int32_t> pictureIds = reset || replaceDpb ? std::vector<int32_t>(slotCount, EmptyPictureSlot) : m_pictureIds;
 
     std::array<bool, 17> used = { };
     std::array<VkVideoPictureResourceInfoKHR, 16> referencePictures = { };
-    std::array<VkVideoDecodeH264DpbSlotInfoKHR, 16> referenceInfo = { };
+    std::array<SlotInfo, 16> referenceInfo = { };
     std::array<VkVideoReferenceSlotInfoKHR, 16> references = { };
 
     VkVideoPictureResourceInfoKHR pictureResource = { VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR };
-    pictureResource.codedExtent = m_extent;
+    pictureResource.codedExtent = picture.extent;
     pictureResource.imageViewBinding = dpb->m_view;
 
     for (uint32_t i = 0; i < params.referenceCount; i++) {
@@ -513,18 +627,36 @@ namespace dxvk {
       auto entry = std::find(pictureIds.begin(), pictureIds.end(), reference.pictureId);
 
       if (entry == pictureIds.end() || reference.pictureId == params.currentPictureId)
-        return dropPicture(params);
+        return dropPicture(params.currentPictureId, picture.reset);
 
       uint32_t slot = uint32_t(entry - pictureIds.begin());
       if (used[slot])
-        return dropPicture(params);
+        return dropPicture(params.currentPictureId, picture.reset);
 
       used[slot] = true;
       referencePictures[i] = pictureResource;
       referencePictures[i].baseArrayLayer = slot;
-      referenceInfo[i] = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_DPB_SLOT_INFO_KHR, nullptr, &reference.info };
+      referenceInfo[i] = { currentInfo.sType, nullptr, &reference.info };
       references[i] = { VK_STRUCTURE_TYPE_VIDEO_REFERENCE_SLOT_INFO_KHR, &referenceInfo[i],
         int32_t(slot), &referencePictures[i] };
+    }
+
+    // DXVA indexes its compact reference list. Vulkan names DPB slots in
+    // the HEVC picture sets, which need not have the same indices.
+    if (picture.hevc) {
+      auto mapSet = [&] (auto& set) {
+        for (auto& index : set) {
+          if (index == STD_VIDEO_H265_NO_REFERENCE_PICTURE)
+            continue;
+          if (index >= params.referenceCount)
+            return false;
+          index = uint8_t(references[index].slotIndex);
+        }
+        return true;
+      };
+      if (!mapSet(picture.hevc->RefPicSetStCurrBefore) || !mapSet(picture.hevc->RefPicSetStCurrAfter)
+       || !mapSet(picture.hevc->RefPicSetLtCurr))
+        return dropPicture(params.currentPictureId, picture.reset);
     }
 
     uint32_t currentSlot = slotCount;
@@ -539,20 +671,23 @@ namespace dxvk {
     }
 
     if (currentSlot == slotCount)
-      return dropPicture(params);
+      return dropPicture(params.currentPictureId, picture.reset);
 
     std::array<VkVideoReferenceSlotInfoKHR, 18> bound = { };
     std::copy_n(references.begin(), params.referenceCount, bound.begin());
     uint32_t boundCount = params.referenceCount;
 
+    if (replaceDpb && !reset) {
+      for (uint32_t i = 0; i < allocatedSlots; i++) {
+        if (m_pictureIds[i] != EmptyPictureSlot)
+          bound[boundCount++] = { VK_STRUCTURE_TYPE_VIDEO_REFERENCE_SLOT_INFO_KHR, nullptr, int32_t(i), nullptr };
+      }
+    }
     if (pictureIds[currentSlot] != EmptyPictureSlot)
       bound[boundCount++] = { VK_STRUCTURE_TYPE_VIDEO_REFERENCE_SLOT_INFO_KHR, nullptr, int32_t(currentSlot), nullptr };
 
     pictureResource.baseArrayLayer = currentSlot;
     bound[boundCount++] = { VK_STRUCTURE_TYPE_VIDEO_REFERENCE_SLOT_INFO_KHR, nullptr, -1, &pictureResource };
-
-    VkVideoDecodeH264DpbSlotInfoKHR currentInfo = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_DPB_SLOT_INFO_KHR };
-    currentInfo.pStdReferenceInfo = &params.currentReference;
 
     VkVideoReferenceSlotInfoKHR current = { VK_STRUCTURE_TYPE_VIDEO_REFERENCE_SLOT_INFO_KHR, &currentInfo };
     current.slotIndex = int32_t(currentSlot);
@@ -563,16 +698,16 @@ namespace dxvk {
     slot.pending = false;
 
     slot.setParameters(m_session, params);
-    const VkDeviceSize size = slot.uploadBitstream(m_device, m_profiles, bytes);
+    const VkDeviceSize size = slot.uploadBitstream(m_device, m_profiles, m_caps.capabilities.minBitstreamBufferSizeAlignment, bytes);
 
     // Graphics may still be copying a decoded picture even after its video
     // fence signals. The command list retains both the image and its storage.
     if (!slot.image || slot.image->isInUse(DxvkAccess::Read)) {
       const auto outputUsage = VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-      auto storage = createImage(video.outputFormat, outputUsage, 1, true);
+      auto storage = createImage(m_caps.outputFormat, outputUsage, 1, true);
 
       DxvkImageCreateInfo imageInfo;
-      imageInfo.format = video.outputFormat.format;
+      imageInfo.format = m_caps.outputFormat.format;
       imageInfo.sampleCount = VK_SAMPLE_COUNT_1_BIT;
       imageInfo.extent = { m_extent.width, m_extent.height, 1 };
       imageInfo.numLayers = 1;
@@ -587,16 +722,11 @@ namespace dxvk {
       slot.output = std::move(storage);
     }
 
-    VkVideoDecodeH264PictureInfoKHR codecPicture = { VK_STRUCTURE_TYPE_VIDEO_DECODE_H264_PICTURE_INFO_KHR };
-    codecPicture.pStdPictureInfo = &params.picture;
-    codecPicture.sliceCount = uint32_t(params.sliceOffsets.size());
-    codecPicture.pSliceOffsets = params.sliceOffsets.data();
-
-    VkVideoDecodeInfoKHR decode = { VK_STRUCTURE_TYPE_VIDEO_DECODE_INFO_KHR, &codecPicture };
+    VkVideoDecodeInfoKHR decode = { VK_STRUCTURE_TYPE_VIDEO_DECODE_INFO_KHR, picture.codecInfo };
     decode.srcBuffer = slot.bitstream->buffer;
     decode.srcBufferRange = size;
     decode.dstPictureResource = { VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR, nullptr,
-      { 0, 0 }, m_extent, 0, slot.output->m_view };
+      { 0, 0 }, picture.extent, 0, slot.output->m_view };
     decode.pSetupReferenceSlot = &current;
     decode.referenceSlotCount = params.referenceCount;
     decode.pReferenceSlots = references.data();
@@ -661,12 +791,13 @@ namespace dxvk {
     submit.pSignalSemaphoreInfos = &signal;
 
     checkVideo(m_vkd->vkResetFences(m_vkd->device(), 1, &slot.fence), "vkResetFences");
-    checkVideo(m_device->submitVideoDecode(submit, slot.fence), "vkQueueSubmit2");
+    checkVideo(m_device->submitVideoDecode(m_queue.queueHandle, submit, slot.fence), "vkQueueSubmit2");
     slot.pending = true;
     slot.dpb = dpb;
 
-    pictureIds[currentSlot] = params.picture.flags.is_reference ? int32_t(params.currentPictureId) : EmptyPictureSlot;
+    pictureIds[currentSlot] = picture.reference ? int32_t(params.currentPictureId) : EmptyPictureSlot;
     m_dpb = std::move(dpb);
+    m_dpbExtent = picture.extent;
     m_pictureIds = std::move(pictureIds);
     m_initialized = true;
     m_completeValue = value;

@@ -2,7 +2,7 @@
 
 #include "d3d11_include.h"
 
-#include "../dxvk/dxvk_h264.h"
+#include "../dxvk/dxvk_video_decoder.h"
 
 #include <dxva.h>
 
