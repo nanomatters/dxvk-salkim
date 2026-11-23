@@ -17,6 +17,17 @@ namespace dxvk {
     VkVideoCapabilitiesKHR     capabilities = { VK_STRUCTURE_TYPE_VIDEO_CAPABILITIES_KHR };
     VkVideoFormatPropertiesKHR outputFormat = { };
     VkVideoFormatPropertiesKHR referenceFormat = { };
+    bool                       combinedOutput = false;
+
+    VkImageUsageFlags outputUsage() const {
+      return VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+           | (combinedOutput ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0);
+    }
+
+    VkImageUsageFlags referenceUsage() const {
+      return VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR
+           | (combinedOutput ? VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
+    }
   };
 
   struct DxvkH264DecodeInfo : DxvkVideoDecodeInfo {

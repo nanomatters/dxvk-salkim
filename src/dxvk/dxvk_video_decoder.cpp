@@ -142,18 +142,27 @@ namespace dxvk {
             VkImageLayout         oldLayout,
             VkImageLayout         newLayout,
             VkAccessFlags2        srcAccess,
-            VkAccessFlags2        dstAccess) {
+            VkAccessFlags2        dstAccess,
+            uint32_t              baseLayer = 0) {
+      auto stages = [] (VkAccessFlags2 access) {
+        VkPipelineStageFlags2 mask = 0;
+        if (access & (VK_ACCESS_2_VIDEO_DECODE_READ_BIT_KHR | VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR))
+          mask |= VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR;
+        if (access & (VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT))
+          mask |= VK_PIPELINE_STAGE_2_COPY_BIT;
+        return mask;
+      };
       VkImageMemoryBarrier2 barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
-      barrier.srcStageMask = srcAccess ? VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR : VK_PIPELINE_STAGE_2_NONE;
+      barrier.srcStageMask = stages(srcAccess);
       barrier.srcAccessMask = srcAccess;
-      barrier.dstStageMask = dstAccess ? VK_PIPELINE_STAGE_2_VIDEO_DECODE_BIT_KHR : VK_PIPELINE_STAGE_2_NONE;
+      barrier.dstStageMask = stages(dstAccess);
       barrier.dstAccessMask = dstAccess;
       barrier.oldLayout = oldLayout;
       barrier.newLayout = newLayout;
       barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
       barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
       barrier.image = image;
-      barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers };
+      barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, baseLayer, layers };
       return barrier;
     }
 
@@ -567,6 +576,7 @@ namespace dxvk {
     const void* codecInfo;
     StdVideoDecodeH265PictureInfo* hevc = nullptr;
     const std::array<uint8_t, STD_VIDEO_AV1_NUM_REF_FRAMES>* av1ReferenceMap = nullptr;
+    bool applyGrain = false;
   };
 
 
@@ -688,7 +698,7 @@ namespace dxvk {
     VkVideoDecodeAV1DpbSlotInfoKHR current = { VK_STRUCTURE_TYPE_VIDEO_DECODE_AV1_DPB_SLOT_INFO_KHR };
     current.pStdReferenceInfo = &currentInfo;
     Picture picture = { params.extent, uint32_t(m_av1References.size()), reset, key,
-      bool(stdPicture.refresh_frame_flags), &codecInfo, nullptr, &params.referenceMap };
+      bool(stdPicture.refresh_frame_flags), &codecInfo, nullptr, &params.referenceMap, bool(stdPicture.flags.apply_grain) };
     return decodePicture(params, bytes, picture, current, referenceCount, references.data());
   }
 
@@ -714,7 +724,7 @@ namespace dxvk {
 
     const bool replaceDpb = slotCount > allocatedSlots;
     auto dpb = replaceDpb
-      ? createImage(m_caps.referenceFormat, VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR, slotCount, false)
+      ? createImage(m_caps.referenceFormat, m_caps.referenceUsage(), slotCount, false)
       : m_dpb;
     std::vector<int32_t> pictureIds = reset || replaceDpb ? std::vector<int32_t>(slotCount, EmptyPictureSlot) : m_pictureIds;
 
@@ -822,8 +832,7 @@ namespace dxvk {
     // Graphics may still be copying a decoded picture even after its video
     // fence signals. The command list retains both the image and its storage.
     if (!slot.image || slot.image->isInUse(DxvkAccess::Read)) {
-      const auto outputUsage = VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-      auto storage = createImage(m_caps.outputFormat, outputUsage, 1, true);
+      auto storage = createImage(m_caps.outputFormat, m_caps.outputUsage(), 1, true);
 
       DxvkImageCreateInfo imageInfo;
       imageInfo.format = m_caps.outputFormat.format;
@@ -846,6 +855,9 @@ namespace dxvk {
     decode.srcBufferRange = size;
     decode.dstPictureResource = { VK_STRUCTURE_TYPE_VIDEO_PICTURE_RESOURCE_INFO_KHR, nullptr,
       { 0, 0 }, picture.extent, 0, slot.output->m_view };
+    const bool copyReference = m_caps.combinedOutput && !picture.applyGrain;
+    if (copyReference)
+      decode.dstPictureResource = pictureResource;
     decode.pSetupReferenceSlot = &current;
     decode.referenceSlotCount = referenceCount;
     decode.pReferenceSlots = references.data();
@@ -856,12 +868,13 @@ namespace dxvk {
     checkVideo(m_vkd->vkBeginCommandBuffer(slot.cmd, &beginCommand), "vkBeginCommandBuffer");
 
     const auto readWrite = VK_ACCESS_2_VIDEO_DECODE_READ_BIT_KHR | VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR;
+    const auto outputLayout = copyReference ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL : VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR;
+    const auto outputWrite = copyReference ? VK_ACCESS_2_TRANSFER_WRITE_BIT : VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR;
     std::array<VkImageMemoryBarrier2, 2> barriers = {{
       videoBarrier(dpb->m_image, slotCount,
         replaceDpb ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR,
         VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR, m_initialized ? readWrite : 0, readWrite),
-      videoBarrier(slot.output->m_image, 1, VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR, 0, VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR),
+      videoBarrier(slot.output->m_image, 1, VK_IMAGE_LAYOUT_UNDEFINED, outputLayout, 0, outputWrite),
     }};
 
     VkDependencyInfo dependency = { VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
@@ -887,10 +900,28 @@ namespace dxvk {
     VkVideoEndCodingInfoKHR endCoding = { VK_STRUCTURE_TYPE_VIDEO_END_CODING_INFO_KHR };
     m_vkd->vkCmdEndVideoCodingKHR(slot.cmd, &endCoding);
 
-    auto ready = videoBarrier(slot.output->m_image, 1, VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR,
-      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR, 0);
-    dependency.imageMemoryBarrierCount = 1;
-    dependency.pImageMemoryBarriers = &ready;
+    if (copyReference) {
+      barriers[0] = videoBarrier(dpb->m_image, 1, VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_2_VIDEO_DECODE_WRITE_BIT_KHR, VK_ACCESS_2_TRANSFER_READ_BIT, currentSlot);
+      dependency.imageMemoryBarrierCount = 1;
+      m_vkd->vkCmdPipelineBarrier2(slot.cmd, &dependency);
+
+      VkImageCopy planes[2] = { };
+      for (uint32_t i = 0; i < 2; i++) {
+        auto aspect = i ? VK_IMAGE_ASPECT_PLANE_1_BIT : VK_IMAGE_ASPECT_PLANE_0_BIT;
+        planes[i].srcSubresource = { aspect, 0, currentSlot, 1 };
+        planes[i].dstSubresource = { aspect, 0, 0, 1 };
+        planes[i].extent = { (picture.extent.width + i) >> i, (picture.extent.height + i) >> i, 1 };
+      }
+      m_vkd->vkCmdCopyImage(slot.cmd, dpb->m_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        slot.output->m_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, planes);
+
+      barriers[1] = videoBarrier(dpb->m_image, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR, VK_ACCESS_2_TRANSFER_READ_BIT, readWrite, currentSlot);
+    }
+    barriers[0] = videoBarrier(slot.output->m_image, 1, outputLayout,
+      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, outputWrite, 0);
+    dependency.imageMemoryBarrierCount = copyReference ? 2 : 1;
     m_vkd->vkCmdPipelineBarrier2(slot.cmd, &dependency);
     checkVideo(m_vkd->vkEndCommandBuffer(slot.cmd), "vkEndCommandBuffer");
 
