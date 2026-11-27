@@ -257,6 +257,11 @@ namespace dxvk {
                   | VK_ACCESS_TRANSFER_WRITE_BIT;
       info.debugName = "Icb";
 
+      if (ModuleInfo.options.maxUniformBufferCount == 0) {
+        info.extraUsage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        info.access |= VK_ACCESS_SHADER_READ_BIT;
+      }
+
       m_buffer = pDevice->GetDXVKDevice()->createBuffer(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
       pDevice->InitShaderIcb(this, icbSizeInBytes, Icb.data);

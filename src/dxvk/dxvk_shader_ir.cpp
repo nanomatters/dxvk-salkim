@@ -416,7 +416,8 @@ namespace dxvk {
           return VK_DESCRIPTOR_TYPE_SAMPLER;
 
         case dxbc_spv::ir::OpCode::eDclCbv: {
-          return op.getType().byteSize() <= m_info.options.maxUniformBufferSize
+          return m_info.options.maxUniformBufferCount != 0
+              && op.getType().byteSize() <= m_info.options.maxUniformBufferSize
             ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
             : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         }

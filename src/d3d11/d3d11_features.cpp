@@ -184,7 +184,7 @@ namespace dxvk {
 
 
   D3D_FEATURE_LEVEL D3D11DeviceFeatures::GetMaxFeatureLevel(const DxvkDevice& Device) {
-    D3D11Options config(Device.instance()->config());
+    D3D11Options config(Device);
     D3D11DeviceFeatures options(Device, config, D3D_FEATURE_LEVEL_12_1);
 
     const auto& features = Device.features();

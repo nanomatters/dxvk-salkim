@@ -23,7 +23,7 @@ namespace dxvk {
     /// Size of the buffer, in bytes
     VkDeviceSize size = 0u;
 
-    /// Buffer usage flags
+    /// Buffer binding and transfer usage
     VkBufferUsageFlags usage = 0u;
 
     /// Pipeline stages that can access
@@ -38,6 +38,14 @@ namespace dxvk {
 
     /// Debug name.
     const char* debugName = nullptr;
+
+    /// Extra Vulkan usage for existing bindings, such as a uniform
+    /// buffer slot backed by a storage buffer descriptor.
+    VkBufferUsageFlags extraUsage = 0u;
+
+    VkBufferUsageFlags vkUsage() const {
+      return usage | extraUsage;
+    }
   };
 
 
@@ -283,7 +291,7 @@ namespace dxvk {
 
       VkBufferCreateInfo info = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
       info.flags = m_info.flags;
-      info.usage = m_info.usage;
+      info.usage = m_info.vkUsage();
       info.size = m_info.size;
       m_sharingMode.fill(info);
 

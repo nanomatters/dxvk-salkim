@@ -1,4 +1,5 @@
 #include "../util/util_math.h"
+#include "../dxvk/dxvk_instance.h"
 
 #include "d3d11_options.h"
 
@@ -12,7 +13,10 @@ namespace dxvk {
 #endif
   }
 
-  D3D11Options::D3D11Options(const Config& config) {
+  D3D11Options::D3D11Options(const DxvkDevice& device) {
+    const auto& config = device.instance()->config();
+    this->computeCbvAsSsbo = device.canUseDescriptorHeap()
+                          && config.getOption<bool>("d3d11.computeCbvAsSsbo", false);
     this->forceComputeLdsBarriers = config.getOption<bool>("d3d11.forceComputeLdsBarriers", false);
     this->forceComputeUavBarriers = config.getOption<bool>("d3d11.forceComputeUavBarriers", false);
     this->relaxedBarriers       = config.getOption<bool>("d3d11.relaxedBarriers", false);

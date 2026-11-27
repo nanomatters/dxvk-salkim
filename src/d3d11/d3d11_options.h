@@ -11,7 +11,7 @@
 namespace dxvk {
 
   struct D3D11Options {
-    D3D11Options(const Config& config);
+    D3D11Options(const DxvkDevice& device);
 
     /// Force thread-group shared memory accesses to be volatile
     ///
@@ -26,6 +26,9 @@ namespace dxvk {
     /// memory regions within a UAV without proper workgroup
     /// synchroniation. Will have a negative performance impact.
     bool forceComputeUavBarriers = false;
+
+    /// Bind compute constant buffers as range-checked storage buffers.
+    bool computeCbvAsSsbo = false;
 
     /// Use relaxed memory barriers
     ///

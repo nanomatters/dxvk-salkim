@@ -49,13 +49,16 @@ namespace dxvk {
     m_dxvkDevice        (pContainer->GetDXVKDevice()),
     m_dxvkAdapter       (m_dxvkDevice->adapter()),
     m_d3d11Formats      (m_dxvkDevice),
-    m_d3d11Options      (m_dxvkDevice->instance()->config()),
+    m_d3d11Options      (*m_dxvkDevice),
     m_shaderOptions     (GetShaderOptions(m_dxvkDevice, m_d3d11Options)),
     m_maxFeatureLevel   (D3D11DeviceFeatures::GetMaxFeatureLevel(*m_dxvkDevice)),
     m_deviceFeatures    (*m_dxvkDevice, m_d3d11Options, m_featureLevel) {
     // This option might lead to long-running submissions
     if (m_d3d11Options.reproducibleCommandStream)
       m_dxvkDevice->setSubmissionTimeout(-1ull);
+
+    if (m_d3d11Options.computeCbvAsSsbo)
+      Logger::info("D3D11: Using storage descriptors for compute constant buffers");
 
     m_initializer = new D3D11Initializer(this);
     m_context     = new D3D11ImmediateContext(this, m_dxvkDevice);
@@ -1006,6 +1009,9 @@ namespace dxvk {
     
     DxvkIrShaderCreateInfo moduleInfo = { };
     moduleInfo.options = m_shaderOptions;
+
+    if (m_d3d11Options.computeCbvAsSsbo)
+      moduleInfo.options.maxUniformBufferCount = 0;
 
     HRESULT hr = CreateShaderModule(&module, pClassLinkage,
       ComputeShaderKey(VK_SHADER_STAGE_COMPUTE_BIT, pShaderBytecode, BytecodeLength),

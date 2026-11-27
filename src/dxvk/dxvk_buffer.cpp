@@ -55,7 +55,7 @@ namespace dxvk {
 
     VkBufferCreateInfo info = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
     info.flags = m_info.flags;
-    info.usage = m_info.usage;
+    info.usage = m_info.vkUsage();
     info.size = m_info.size;
     m_sharingMode.fill(info);
 
@@ -136,7 +136,7 @@ namespace dxvk {
 
     VkBufferCreateInfo info = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
     info.flags = m_info.flags;
-    info.usage = m_info.usage;
+    info.usage = m_info.vkUsage();
     info.size = m_info.size;
     m_sharingMode.fill(info);
 

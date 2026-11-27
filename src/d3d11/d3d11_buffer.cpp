@@ -41,6 +41,11 @@ namespace dxvk {
       info.usage  |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
       info.stages |= m_parent->GetEnabledShaderStages();
       info.access |= VK_ACCESS_UNIFORM_READ_BIT;
+
+      if (m_parent->GetOptions()->computeCbvAsSsbo) {
+        info.extraUsage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        info.access |= VK_ACCESS_SHADER_READ_BIT;
+      }
     }
     
     if (pDesc->BindFlags & D3D11_BIND_SHADER_RESOURCE) {
@@ -490,7 +495,7 @@ namespace dxvk {
       const auto& info = buffer->info();
       pInfo->flags = info.flags;
       pInfo->size = info.size;
-      pInfo->usage = info.usage;
+      pInfo->usage = info.vkUsage();
 
       if (!sharingMode.writeBack(*pInfo))
         hr = S_FALSE;
@@ -503,7 +508,7 @@ namespace dxvk {
           return E_INVALIDARG;
 
         pInfo->usage = 0u;
-        pUsageInfo->usage = info.usage;
+        pUsageInfo->usage = info.vkUsage();
       }
     }
 
