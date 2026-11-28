@@ -228,8 +228,8 @@ namespace dxvk {
       return false;
 
     // Large formats may exceed available LDS size. Overestimate usage a little.
-    uint32_t ldsSize = (1u << (MipCount + MipCount)) * std::max<uint32_t>(1u,
-      lookupFormatInfo(viewFormat)->elementSize / sizeof(uint32_t));
+    uint32_t ldsSize = (1u << (MipCount + MipCount)) * std::max<uint32_t>(
+      sizeof(uint32_t), lookupFormatInfo(viewFormat)->elementSize);
 
     if (ldsSize > m_device->properties().core.properties.limits.maxComputeSharedMemorySize)
       return false;
