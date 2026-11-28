@@ -519,19 +519,19 @@ void store_pixel_to_lds(uvec2 coord, pixel_t px) {
 
     case VK_FORMAT_R8_SNORM: {
       float16_t data = float16_t(127.0f) * px_as_f16(px).x;
-      g_pixels[idx] = pack32(u8vec4(roundEven(data), 0u.xxx));
+      g_pixels[idx] = uint(pack32(i8vec4(roundEven(data), i8vec3(0))));
     } break;
 
     case VK_FORMAT_R8G8_SNORM: {
       f16vec2 data = float16_t(127.0f) * px_as_f16(px).xy;
-      g_pixels[idx] = pack32(u8vec4(roundEven(data.xy), 0u.xx));
+      g_pixels[idx] = uint(pack32(i8vec4(roundEven(data.xy), i8vec2(0))));
     } break;
 
     case VK_FORMAT_R8G8B8A8_SNORM:
     case VK_FORMAT_B8G8R8A8_SNORM:
     case VK_FORMAT_A8B8G8R8_SNORM_PACK32: {
       f16vec4 data = float16_t(127.0f) * px_as_f16(px);
-      g_pixels[idx] = pack32(u8vec4(roundEven(data)));
+      g_pixels[idx] = uint(pack32(i8vec4(roundEven(data))));
     } break;
 
     case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
@@ -683,13 +683,14 @@ pixel_t load_pixel_from_lds(uvec2 coord, uvec2 ofs) {
 
     case VK_FORMAT_A2R10G10B10_SNORM_PACK32:
     case VK_FORMAT_A2B10G10R10_SNORM_PACK32: {
-      i16vec4 udata = i16vec4(
-        bitfieldExtract(px.x,  0, 10),
-        bitfieldExtract(px.x, 10, 10),
-        bitfieldExtract(px.x, 20, 10),
-        bitfieldExtract(px.x, 30,  2));
+      int word = int(px.x);
+      i16vec4 idata = i16vec4(
+        bitfieldExtract(word,  0, 10),
+        bitfieldExtract(word, 10, 10),
+        bitfieldExtract(word, 20, 10),
+        bitfieldExtract(word, 30,  2));
 
-      f16vec4 data = f16vec4(udata) / f16vec4(511.0f.xxx, 1.0f);
+      f16vec4 data = f16vec4(idata) / f16vec4(511.0f.xxx, 1.0f);
       return px_set_f16(data);
     }
 
