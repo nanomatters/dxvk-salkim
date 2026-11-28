@@ -1385,9 +1385,15 @@ namespace dxvk {
     const DxvkGraphicsPipelineBaseInstanceKey& key) const {
     auto vk = m_device->vkd();
 
+    // Keep one reference per participating library for each cached entry,
+    // including failed links. destroyBasePipelines releases the same set.
     DxvkShaderPipelineLibraryHandle vs = m_vsLibrary->acquirePipelineHandle();
+    DxvkShaderPipelineLibraryHandle fs = {};
 
-    if (!vs.handle)
+    if (key.foLibrary)
+      fs = m_fsLibrary->acquirePipelineHandle();
+
+    if (!vs.handle || (key.foLibrary && !fs.handle))
       return VK_NULL_HANDLE;
 
     VkPipelineCreateFlags2CreateInfo flags = { VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO };
@@ -1403,12 +1409,7 @@ namespace dxvk {
     libraries.push_back(key.viLibrary->getHandle());
     libraries.push_back(vs.handle);
 
-    if (!m_flags.test(DxvkGraphicsPipelineFlag::HasRasterizerDiscard)) {
-      DxvkShaderPipelineLibraryHandle fs = m_fsLibrary->acquirePipelineHandle();
-
-      if (!fs.handle)
-        return VK_NULL_HANDLE;
-
+    if (key.foLibrary) {
       libraries.push_back(fs.handle);
       libraries.push_back(key.foLibrary->getHandle());
 
@@ -1548,7 +1549,9 @@ namespace dxvk {
       this->destroyVulkanPipeline(instance.second);
 
       m_vsLibrary->releasePipelineHandle();
-      m_fsLibrary->releasePipelineHandle();
+
+      if (instance.first.foLibrary)
+        m_fsLibrary->releasePipelineHandle();
     }
 
     m_basePipelines.clear();
